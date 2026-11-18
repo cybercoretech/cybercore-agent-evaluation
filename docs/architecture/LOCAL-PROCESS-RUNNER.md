@@ -51,7 +51,7 @@ Bubblewrap is launched with:
 
 `NetworkPolicy::DenyAll` and `SideEffectPolicy::DenyAll` are the only accepted policies. Network allowlists and side-effect allowlists are rejected. Writes are limited to the ephemeral tmpfs workspace and `/tmp`; they do not persist on the host after the run. The input mount is read-only.
 
-The host-side input staging directory is created with mode 0700 and staged input files with mode 0600; it is removed after normal execution. A host crash or forced termination can leave a stale staging directory, so operators must manage the configured temporary root. Stdout and stderr are read concurrently under one combined output-byte budget. If the process exceeds the capture limit, the Bubblewrap process is terminated. A wall-clock timeout also terminates the sandbox process.
+The host-side input staging directory is created with mode 0700 and staged input files with mode 0600; it is removed after normal execution. A host crash or forced termination can leave a stale staging directory, so operators must manage the configured temporary root. Stdout and stderr are read concurrently under one combined output-byte budget. If the process exceeds the capture limit, the Bubblewrap process is terminated. A wall-clock timeout also terminates the sandbox process. After the process exits (normally or after termination), stdout and stderr get a fixed 2-second drain grace period to close; a stream still open after that is abandoned, so a descendant holding a pipe cannot stall the runner past its budget.
 
 Do not pass credentials, API keys, or other secrets in process arguments or task environment values. Bubblewrap receives those values as host-side command-line arguments, which may be visible to same-user or privileged host process inspection. The temporary input staging files also exist briefly on the host filesystem. Stdout/stderr are captured without redaction. A credential broker or secret-injection mechanism is not implemented.
 
@@ -63,10 +63,11 @@ The result includes:
 - Exit code when available.
 - Captured stdout and stderr as UTF-8-lossy strings. Output is not redacted in this version; do not use it with secrets or sensitive data that must be filtered before capture.
 - `output_truncated` to disclose byte-limited capture.
+- `output_drain_timed_out` when a stream did not close within the drain grace period; that stream's capture is discarded and reported as empty and truncated.
 - `unmeasured_usage_fields` marks token and tool-call usage as unavailable. Their zero-valued fields in the shared `ResourceUsage` DTO are placeholders, not measured zero usage.
 - Measured wall time and captured output bytes (the retained byte count; `output_truncated` discloses when more output was emitted than retained).
 - `Finished` only when the process exits with code zero.
-- `Errored` for non-zero exit or output-limit termination.
+- `Errored` for non-zero exit, output-limit termination, or a drain timeout (failure code `output_drain_timed_out`).
 - `TimedOut` for wall-clock termination.
 
 The concrete adapter requires a Tokio runtime for asynchronous process I/O. A zero exit code is only an execution result. It does not mean the task passed. Independent grading and verification remain separate.

@@ -37,6 +37,8 @@ const MAX_CONFIGURED_ARGUMENT_BYTES: u64 = 512 * 1024;
 const MAX_SINGLE_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_INPUT_PATH_BYTES: usize = 4096;
 const MAX_INPUT_PATH_COMPONENT_BYTES: usize = 255;
+/// How long stdout/stderr may stay open after the sandbox process exits.
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct LocalProcessRunnerConfig {
@@ -476,61 +478,25 @@ impl LocalProcessRunner {
             used: AtomicU64::new(0),
             maximum: request.budget.max_output_bytes,
         });
-        let mut stdout_task = tokio::spawn(capture_output(stdout, output_budget.clone()));
-        let mut stderr_task = tokio::spawn(capture_output(stderr, output_budget));
-        let mut stdout_capture: Option<OutputCapture> = None;
-        let mut stderr_capture: Option<OutputCapture> = None;
-        let mut exit_status: Option<ExitStatus> = None;
-        let mut timed_out = false;
-        let mut output_limit_exceeded = false;
-        let deadline = tokio::time::sleep(Duration::from_millis(request.budget.max_wall_time_ms));
-        tokio::pin!(deadline);
-
-        loop {
-            if exit_status.is_some() && stdout_capture.is_some() && stderr_capture.is_some() {
-                break;
-            }
-            tokio::select! {
-                status = child.wait(), if exit_status.is_none() => {
-                    exit_status = Some(status.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not wait for the sandbox process"))?);
-                }
-                result = &mut stdout_task, if stdout_capture.is_none() => {
-                    let captured = finish_capture(result)?;
-                    if captured.truncated && !output_limit_exceeded {
-                        output_limit_exceeded = true;
-                        let _ = child.kill().await;
-                        if exit_status.is_none() {
-                            exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop an output-limited process"))?);
-                        }
-                    }
-                    stdout_capture = Some(captured);
-                }
-                result = &mut stderr_task, if stderr_capture.is_none() => {
-                    let captured = finish_capture(result)?;
-                    if captured.truncated && !output_limit_exceeded {
-                        output_limit_exceeded = true;
-                        let _ = child.kill().await;
-                        if exit_status.is_none() {
-                            exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop an output-limited process"))?);
-                        }
-                    }
-                    stderr_capture = Some(captured);
-                }
-                _ = &mut deadline, if !timed_out => {
-                    timed_out = true;
-                    let _ = child.kill().await;
-                    if exit_status.is_none() {
-                        exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop a timed-out process"))?);
-                    }
-                }
-            }
-        }
+        let stdout_task = tokio::spawn(capture_output(stdout, output_budget.clone()));
+        let stderr_task = tokio::spawn(capture_output(stderr, output_budget));
+        let CollectedOutput {
+            exit_status,
+            stdout: stdout_capture,
+            stderr: stderr_capture,
+            timed_out,
+            output_limit_exceeded,
+            drain_timed_out,
+        } = collect_process_output(
+            &mut child,
+            stdout_task,
+            stderr_task,
+            Duration::from_millis(request.budget.max_wall_time_ms),
+            OUTPUT_DRAIN_GRACE,
+        )
+        .await?;
 
         let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let stdout_capture =
-            stdout_capture.expect("capture loop exits only after stdout is captured");
-        let stderr_capture =
-            stderr_capture.expect("capture loop exits only after stderr is captured");
         let output_bytes = (stdout_capture.bytes.len() + stderr_capture.bytes.len()) as u64;
         let output_truncated = stdout_capture.truncated || stderr_capture.truncated;
         let stdout_text = String::from_utf8_lossy(&stdout_capture.bytes).into_owned();
@@ -548,6 +514,16 @@ impl LocalProcessRunner {
                 Some(RunnerFailure {
                     code: "output_limit_exceeded".into(),
                     message: "process output exceeded the configured capture limit; sandbox was terminated".into(),
+                    retryable: false,
+                }),
+                "execution_errored",
+            )
+        } else if drain_timed_out {
+            (
+                ExecutionDisposition::Errored,
+                Some(RunnerFailure {
+                    code: "output_drain_timed_out".into(),
+                    message: "process output did not close within the drain grace period after the process exited; unread output was discarded".into(),
                     retryable: false,
                 }),
                 "execution_errored",
@@ -575,6 +551,7 @@ impl LocalProcessRunner {
             "stderr": stderr_text,
             "output_encoding": "utf-8-lossy",
             "output_truncated": output_truncated,
+            "output_drain_timed_out": drain_timed_out,
             "stdout_stderr_redaction": "not_implemented",
             "unmeasured_usage_fields": ["input_tokens", "output_tokens", "tool_calls"],
             "workspace_persisted": false,
@@ -632,6 +609,114 @@ impl Runner for LocalProcessRunner {
 
     fn execute<'a>(&'a self, request: &'a ExecutionRequest) -> RunnerFuture<'a> {
         Box::pin(async move { self.execute_inner(request).await })
+    }
+}
+
+struct CollectedOutput {
+    exit_status: Option<ExitStatus>,
+    stdout: OutputCapture,
+    stderr: OutputCapture,
+    timed_out: bool,
+    output_limit_exceeded: bool,
+    /// A pipe stayed open past `drain_grace` after the process exited; that
+    /// stream's capture was abandoned and is reported as empty and truncated.
+    drain_timed_out: bool,
+}
+
+/// Waits for the process and both output captures, enforcing the wall-time
+/// budget and the shared output limit. Once the process has exited, the
+/// captures get at most `drain_grace` to finish, so a descendant that keeps a
+/// pipe open can never stall the runner past its budget.
+async fn collect_process_output(
+    child: &mut tokio::process::Child,
+    mut stdout_task: tokio::task::JoinHandle<io::Result<OutputCapture>>,
+    mut stderr_task: tokio::task::JoinHandle<io::Result<OutputCapture>>,
+    wall_time: Duration,
+    drain_grace: Duration,
+) -> Result<CollectedOutput, RunnerError> {
+    let mut stdout_capture: Option<OutputCapture> = None;
+    let mut stderr_capture: Option<OutputCapture> = None;
+    let mut exit_status: Option<ExitStatus> = None;
+    let mut timed_out = false;
+    let mut output_limit_exceeded = false;
+    let mut drain_timed_out = false;
+    let deadline = tokio::time::sleep(wall_time);
+    tokio::pin!(deadline);
+    let drain_deadline = tokio::time::sleep(drain_grace);
+    tokio::pin!(drain_deadline);
+    let mut drain_armed = false;
+
+    loop {
+        if exit_status.is_some() && stdout_capture.is_some() && stderr_capture.is_some() {
+            break;
+        }
+        if exit_status.is_some() && !drain_armed {
+            drain_deadline
+                .as_mut()
+                .reset(tokio::time::Instant::now() + drain_grace);
+            drain_armed = true;
+        }
+        tokio::select! {
+            status = child.wait(), if exit_status.is_none() => {
+                exit_status = Some(status.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not wait for the sandbox process"))?);
+            }
+            result = &mut stdout_task, if stdout_capture.is_none() => {
+                let captured = finish_capture(result)?;
+                if captured.truncated && !output_limit_exceeded {
+                    output_limit_exceeded = true;
+                    let _ = child.kill().await;
+                    if exit_status.is_none() {
+                        exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop an output-limited process"))?);
+                    }
+                }
+                stdout_capture = Some(captured);
+            }
+            result = &mut stderr_task, if stderr_capture.is_none() => {
+                let captured = finish_capture(result)?;
+                if captured.truncated && !output_limit_exceeded {
+                    output_limit_exceeded = true;
+                    let _ = child.kill().await;
+                    if exit_status.is_none() {
+                        exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop an output-limited process"))?);
+                    }
+                }
+                stderr_capture = Some(captured);
+            }
+            _ = &mut deadline, if !timed_out => {
+                timed_out = true;
+                let _ = child.kill().await;
+                if exit_status.is_none() {
+                    exit_status = Some(child.wait().await.map_err(|_| runner_error(RunnerErrorKind::Internal, false, "could not stop a timed-out process"))?);
+                }
+            }
+            _ = &mut drain_deadline, if drain_armed => {
+                drain_timed_out = true;
+                if stdout_capture.is_none() {
+                    stdout_task.abort();
+                    stdout_capture = Some(OutputCapture { bytes: Vec::new(), truncated: true });
+                }
+                if stderr_capture.is_none() {
+                    stderr_task.abort();
+                    stderr_capture = Some(OutputCapture { bytes: Vec::new(), truncated: true });
+                }
+            }
+        }
+    }
+
+    match (stdout_capture, stderr_capture) {
+        (Some(stdout), Some(stderr)) => Ok(CollectedOutput {
+            exit_status,
+            stdout,
+            stderr,
+            timed_out,
+            output_limit_exceeded,
+            drain_timed_out,
+        }),
+        _ => Err(runner_error(
+            RunnerErrorKind::Internal,
+            false,
+            "output capture loop ended without both captures",
+        )),
     }
 }
 
@@ -1115,5 +1200,81 @@ mod tests {
         assert!(write_input_files(&temp.path, &files, 1024).is_err());
         drop(temp);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Runs `script` under the host `sh` (no sandbox) through the same
+    /// collection loop the Bubblewrap runner uses.
+    async fn collect_host_script(
+        script: &str,
+        wall_time: Duration,
+        drain_grace: Duration,
+    ) -> (CollectedOutput, Duration) {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let budget = Arc::new(SharedOutputBudget {
+            used: AtomicU64::new(0),
+            maximum: 1024,
+        });
+        let stdout = tokio::spawn(capture_output(child.stdout.take().unwrap(), budget.clone()));
+        let stderr = tokio::spawn(capture_output(child.stderr.take().unwrap(), budget));
+        let started = Instant::now();
+        let collected = collect_process_output(&mut child, stdout, stderr, wall_time, drain_grace)
+            .await
+            .unwrap();
+        (collected, started.elapsed())
+    }
+
+    #[tokio::test]
+    async fn normal_exit_collects_output_without_drain_timeout() {
+        let (collected, _) = collect_host_script(
+            "printf out; printf err >&2",
+            Duration::from_secs(10),
+            Duration::from_millis(500),
+        )
+        .await;
+        assert_eq!(collected.stdout.bytes, b"out");
+        assert_eq!(collected.stderr.bytes, b"err");
+        assert_eq!(collected.exit_status.and_then(|s| s.code()), Some(0));
+        assert!(!collected.timed_out && !collected.output_limit_exceeded);
+        assert!(!collected.drain_timed_out);
+    }
+
+    #[tokio::test]
+    async fn pipe_held_open_after_exit_is_bounded_by_drain_grace() {
+        // The background `sleep` inherits stdout/stderr and keeps both pipes
+        // open after the shell itself exits.
+        let (collected, elapsed) = collect_host_script(
+            "sleep 3 & exit 0",
+            Duration::from_secs(10),
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        assert_eq!(collected.exit_status.and_then(|s| s.code()), Some(0));
+        assert!(!collected.timed_out);
+        assert!(collected.drain_timed_out);
+        assert!(collected.stdout.truncated && collected.stderr.truncated);
+    }
+
+    #[tokio::test]
+    async fn pipe_held_open_after_timeout_kill_is_bounded_by_drain_grace() {
+        // Killing the shell at the deadline leaves the background `sleep`
+        // holding the pipes; before the drain grace this waited for it.
+        let (collected, elapsed) = collect_host_script(
+            "sleep 3 & sleep 30",
+            Duration::from_millis(200),
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        assert!(collected.timed_out);
+        assert!(collected.drain_timed_out);
     }
 }

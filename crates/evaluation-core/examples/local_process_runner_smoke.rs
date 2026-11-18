@@ -36,6 +36,9 @@ async fn main() -> Result<()> {
         max_input_files: 8,
         max_arguments: 64,
         max_argument_bytes: 64 * 1024,
+        artifact_root: None,
+        max_artifact_bytes: 0,
+        max_output_files: 0,
     };
 
     let runner = LocalProcessRunner::new(config)?;

@@ -220,6 +220,10 @@ impl EvaluationFile {
             max_input_files: limits.max_input_files,
             max_arguments: limits.max_arguments,
             max_argument_bytes: limits.max_argument_bytes,
+            // File checks in evaluation files are not wired up yet.
+            artifact_root: None,
+            max_artifact_bytes: 0,
+            max_output_files: 0,
         }
     }
 

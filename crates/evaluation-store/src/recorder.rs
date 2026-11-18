@@ -14,11 +14,13 @@ use crate::local::LocalStore;
 use crate::metadata::now;
 use crate::scheduler::{Command, DurableScheduler, INTERRUPTED_ATTEMPT_MESSAGE};
 use cybercore_evaluation_core::{
-    AttemptIdentity, AttemptStatus, ExecutionDisposition, RecordReference, Runner, RunnerError,
-    RunnerErrorKind, RunnerResult, RunnerType, TrialDefinition,
+    artifact_staging_dir, ArtifactManifest, AttemptIdentity, AttemptStatus, ExecutionDisposition,
+    RecordReference, Runner, RunnerError, RunnerErrorKind, RunnerResult, RunnerType,
+    TrialDefinition,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: &str = "0.1.0";
 const COMPONENT: &str = "cybercore-evaluation-store/run-recorder";
@@ -90,6 +92,10 @@ pub struct CriterionVerdict {
     /// Required (at least one) for `Inconclusive` and `Unavailable`.
     pub limitations: Vec<String>,
     pub judge_rationale: Option<String>,
+    /// Workspace output files this verdict inspected (paths relative to
+    /// `/workspace/output`). The verification cites their evidence when it is
+    /// stored; an empty list cites the runner output.
+    pub evidence_paths: Vec<String>,
 }
 
 /// What a verifier may inspect for one finished attempt.
@@ -97,6 +103,9 @@ pub struct VerificationInput<'a> {
     pub trial: &'a TrialDefinition,
     pub run_ref: &'a RecordReference,
     pub result: &'a RunnerResult,
+    /// Collected `/workspace/output` files, by relative path, each verified
+    /// against its manifest digest. Empty when outputs were not collected.
+    pub files: &'a BTreeMap<String, Vec<u8>>,
 }
 
 /// Independent verification port. Implementations hold their own criteria
@@ -140,6 +149,7 @@ impl Verifier for StdoutEqualsVerifier {
             result,
             limitations,
             judge_rationale: rationale,
+            evidence_paths: Vec::new(),
         };
         let Some(expected) = self.expected.get(trial_id) else {
             return vec![base(
@@ -194,6 +204,9 @@ pub struct RunRecorderConfig {
     /// not_required`). When disabled, verification cites the run's terminal
     /// `run_event` instead.
     pub store_output_evidence: bool,
+    /// The runner's `artifact_root`, where collected workspace files are
+    /// staged. `None` when the runner does not collect outputs.
+    pub artifact_root: Option<PathBuf>,
 }
 
 impl RunRecorderConfig {
@@ -210,7 +223,14 @@ impl RunRecorderConfig {
             runner_version: descriptor.runner_version.clone(),
             project_ref,
             store_output_evidence,
+            artifact_root: None,
         }
+    }
+
+    /// Where the runner stages collected workspace files.
+    pub fn with_artifact_root(mut self, artifact_root: impl Into<PathBuf>) -> Self {
+        self.artifact_root = Some(artifact_root.into());
+        self
     }
 }
 
@@ -433,6 +453,59 @@ impl LocalStore {
             }
         }
 
+        // Collected workspace files: verified against their manifests, given to
+        // the verifier, and stored as evidence under the same attestation.
+        let staging = match (&config.artifact_root, attempt.result) {
+            (Some(root), Ok(result)) if !result.artifacts.is_empty() => {
+                Some(artifact_staging_dir(root, &attempt.identity.request_id))
+            }
+            _ => None,
+        };
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut file_evidence: BTreeMap<String, Value> = BTreeMap::new();
+        if let (Some(staging), Ok(result)) = (&staging, attempt.result) {
+            for (index, manifest) in result.artifacts.iter().enumerate() {
+                let Some(bytes) = read_staged(staging, manifest) else {
+                    continue; // missing or altered: verifiers see it as absent
+                };
+                if config.store_output_evidence {
+                    let evidence_id = format!("{run_id}:FILE:{index:03}");
+                    let draft = json!({
+                        "record_id": evidence_id,
+                        "record_type": "evidence_artifact",
+                        "schema_version": SCHEMA_VERSION,
+                        "created_at": created_at,
+                        "provenance": provenance,
+                        "project_ref": reference_json(&config.project_ref),
+                        "source_record_ref": {"record_id": run_id, "record_type": "run"},
+                        "artifact_kind": "agent_output",
+                        "content_type": manifest.content_type,
+                        "redaction_state": "not_required",
+                        "access_classification": "project_internal",
+                        "retention": {"policy_id": "workbench-default", "legal_hold": false},
+                        "description": format!("Workspace output file {} (caller-attested non-sensitive).", manifest.artifact_id)
+                    });
+                    self.put_evidence(&draft, &bytes)?;
+                    let reference = json!({
+                        "evidence_id": evidence_id,
+                        "evidence_type": "evidence_artifact",
+                        "relationship": "source",
+                        "sha256_digest": manifest.sha256_hex.to_ascii_lowercase(),
+                    });
+                    evidence_refs.push(reference.clone());
+                    file_evidence.insert(manifest.artifact_id.clone(), reference);
+                }
+                files.insert(manifest.artifact_id.clone(), bytes);
+            }
+        }
+        // The runner-output evidence (stdout) is the first reference, if any.
+        let output_evidence: Vec<Value> = evidence_refs
+            .first()
+            .filter(|r| r["evidence_id"] == json!(format!("{run_id}:OUTPUT")))
+            .cloned()
+            .into_iter()
+            .collect();
+
         // Runner events.
         let mut records = Vec::new();
         let mut event_refs = Vec::new();
@@ -476,23 +549,33 @@ impl LocalStore {
                 trial: attempt.trial,
                 run_ref,
                 result,
+                files: &files,
             });
-            let cited: Vec<Value> = if !evidence_refs.is_empty() {
-                evidence_refs.clone()
-            } else {
-                event_refs
-                    .last()
-                    .map(|event| {
-                        vec![json!({
-                            "evidence_id": event["record_id"],
-                            "evidence_type": "run_event",
-                            "relationship": "source",
-                        })]
-                    })
-                    .unwrap_or_default()
-            };
+            let terminal_event: Vec<Value> = event_refs
+                .last()
+                .map(|event| {
+                    vec![json!({
+                        "evidence_id": event["record_id"],
+                        "evidence_type": "run_event",
+                        "relationship": "source",
+                    })]
+                })
+                .unwrap_or_default();
             let performed_at = now();
             for verdict in verdicts {
+                // Cite what the verdict inspected: its files' evidence, else
+                // the stdout evidence, else the run's terminal event.
+                let mut cited: Vec<Value> = verdict
+                    .evidence_paths
+                    .iter()
+                    .filter_map(|path| file_evidence.get(path).cloned())
+                    .collect();
+                if cited.is_empty() && verdict.evidence_paths.is_empty() {
+                    cited = output_evidence.clone();
+                }
+                if cited.is_empty() {
+                    cited = terminal_event.clone();
+                }
                 if verdict.result.is_definitive() && cited.is_empty() {
                     return Err(StoreError::InvalidRecord(format!(
                         "{run_id}: verifier returned {} for {} with no inspectable evidence",
@@ -622,6 +705,11 @@ impl LocalStore {
         records.push(run);
 
         self.metadata().put_records(&records)?;
+        if let Some(staging) = staging {
+            // Recorded (and stored as evidence when attested): the staged copy
+            // is no longer needed. It stays if recording failed, for catch-up.
+            let _ = std::fs::remove_dir_all(staging);
+        }
         Ok(())
     }
 }
@@ -717,6 +805,27 @@ impl OutcomePolicy {
         }
         "pass"
     }
+}
+
+/// Reads a staged workspace file if it is a regular file whose length and
+/// SHA-256 match its manifest. Anything else is treated as absent.
+fn read_staged(staging: &Path, manifest: &ArtifactManifest) -> Option<Vec<u8>> {
+    let relative = Path::new(&manifest.artifact_id);
+    let safe = relative
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !safe {
+        return None;
+    }
+    let path = staging.join(relative);
+    if !std::fs::symlink_metadata(&path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let digest = crate::canonical::sha256_hex(&bytes);
+    (bytes.len() as u64 == manifest.byte_length
+        && digest.eq_ignore_ascii_case(&manifest.sha256_hex))
+    .then_some(bytes)
 }
 
 /// Combines criterion results without forcing a binary answer:

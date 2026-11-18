@@ -7,7 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
 #[derive(Clone)]
@@ -18,10 +17,8 @@ struct SchemaEntry {
 }
 
 fn read_json(path: &Path) -> Result<Value> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text)
-        .with_context(|| format!("parsing JSON in {}", path.display()))
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing JSON in {}", path.display()))
 }
 
 fn collect_schema_paths(root: &Path) -> Result<Vec<PathBuf>> {
@@ -29,7 +26,12 @@ fn collect_schema_paths(root: &Path) -> Result<Vec<PathBuf>> {
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".schema.json"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".schema.json")
+        })
         .map(|entry| entry.into_path())
         .collect::<Vec<_>>();
     paths.sort();
@@ -80,7 +82,9 @@ fn collect_fixture_paths(root: &Path) -> Result<Vec<PathBuf>> {
 fn main() -> Result<()> {
     let repository_root = match env::args().nth(1) {
         Some(root) => PathBuf::from(root).canonicalize()?,
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").canonicalize()?,
+        None => Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()?,
     };
     let schema_root = repository_root.join("contracts/schemas/v0");
     let fixture_root = repository_root.join("contracts/fixtures");
@@ -102,18 +106,28 @@ fn main() -> Result<()> {
         }
         let dialect = schema.get("$schema").and_then(Value::as_str);
         if dialect != Some(DRAFT_2020_12) {
-            bail!("unexpected JSON Schema dialect in {}: {dialect:?}", schema_path.display());
+            bail!(
+                "unexpected JSON Schema dialect in {}: {dialect:?}",
+                schema_path.display()
+            );
         }
 
         let index = schemas.len();
         let mut record_types = BTreeSet::new();
         collect_record_type_constants(&schema, &mut record_types);
         for record_type in record_types {
-            if record_type_to_schema.insert(record_type.clone(), index).is_some() {
+            if record_type_to_schema
+                .insert(record_type.clone(), index)
+                .is_some()
+            {
                 bail!("more than one persisted-record schema declares record_type={record_type}");
             }
         }
-        schemas.push(SchemaEntry { path: schema_path, id, schema });
+        schemas.push(SchemaEntry {
+            path: schema_path,
+            id,
+            schema,
+        });
     }
 
     // Resolve every $ref from the checked-in registry only. Offline mode below
@@ -161,10 +175,18 @@ fn main() -> Result<()> {
             let record_type = record
                 .get("record_type")
                 .and_then(Value::as_str)
-                .with_context(|| format!("fixture lacks string record_type: {}", fixture_path.display()))?;
-            let index = record_type_to_schema
-                .get(record_type)
-                .with_context(|| format!("no schema declares record_type={record_type} for {}", fixture_path.display()))?;
+                .with_context(|| {
+                    format!(
+                        "fixture lacks string record_type: {}",
+                        fixture_path.display()
+                    )
+                })?;
+            let index = record_type_to_schema.get(record_type).with_context(|| {
+                format!(
+                    "no schema declares record_type={record_type} for {}",
+                    fixture_path.display()
+                )
+            })?;
             let entry = &schemas[*index];
             let validator = draft202012::options()
                 .with_registry(registry)
@@ -188,10 +210,18 @@ fn main() -> Result<()> {
     }
 
     let valid_count = validate_fixture_directory(
-        &fixture_root.join("valid"), true, &schemas, &record_type_to_schema, &registry
+        &fixture_root.join("valid"),
+        true,
+        &schemas,
+        &record_type_to_schema,
+        &registry,
     )?;
     let invalid_count = validate_fixture_directory(
-        &fixture_root.join("invalid"), false, &schemas, &record_type_to_schema, &registry
+        &fixture_root.join("invalid"),
+        false,
+        &schemas,
+        &record_type_to_schema,
+        &registry,
     )?;
 
     println!(
@@ -200,7 +230,9 @@ fn main() -> Result<()> {
         record_type_to_schema.len()
     );
     println!("Format assertions active: date-time; invalid-date-time probe rejected.");
-    println!("PASS: {valid_count} valid fixtures accepted; {invalid_count} invalid fixtures rejected.");
+    println!(
+        "PASS: {valid_count} valid fixtures accepted; {invalid_count} invalid fixtures rejected."
+    );
 
     let (domain_valid_count, domain_invalid_count) =
         cybercore_evaluation_core::validate_domain_fixtures(&repository_root)?;

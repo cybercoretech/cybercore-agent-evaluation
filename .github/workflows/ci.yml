@@ -28,8 +28,10 @@ jobs:
           cache-dependency-path: contracts/conformance/typescript/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Rustfmt
+        run: cargo fmt --all --check
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Python, TypeScript and Rust contract conformance + core tests

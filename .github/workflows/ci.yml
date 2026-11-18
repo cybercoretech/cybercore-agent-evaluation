@@ -34,5 +34,7 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust workspace tests (core, store, conformance)
+        run: cargo test --workspace --locked
       - name: Python, TypeScript and Rust contract conformance + core tests
         run: bash scripts/validate_all_contracts.sh

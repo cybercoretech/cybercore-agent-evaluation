@@ -1,6 +1,6 @@
 # 🔬 CyberCore Agent Evaluation Workbench
 
-**Status:** contract foundation, Python/TypeScript/Rust conformance, initial Rust domain core, in-memory evaluation/trial orchestration with durable local scheduling (fenced write-ahead journal, ADR-0010) that records each resolved attempt as `run`/`run_event`/`verification_result` records judged by a pluggable independent verifier (ADR-0011), a Bubblewrap-backed Linux local process runner prototype, and local persistence (SQLite metadata + content-addressed evidence store, `crates/evaluation-store`) implemented. Hosted scheduling, hosted D1/R2 persistence adapters, runner artifact export, production-grade hostile-code isolation, API, CLI, MCP, and UI adapters remain unimplemented.
+**Status:** contract foundation, Python/TypeScript/Rust conformance, initial Rust domain core, in-memory evaluation/trial orchestration with durable local scheduling (fenced write-ahead journal, ADR-0010) that records each resolved attempt as `run`/`run_event`/`verification_result` records judged by a pluggable independent verifier (ADR-0011), and a local `workbench` CLI to run and inspect evaluations (ADR-0012), a Bubblewrap-backed Linux local process runner prototype, and local persistence (SQLite metadata + content-addressed evidence store, `crates/evaluation-store`) implemented. Hosted scheduling, hosted D1/R2 persistence adapters, runner artifact export, production-grade hostile-code isolation, API, MCP, and UI adapters remain unimplemented.
 
 The CyberCore Agent Evaluation Workbench is a provider-independent platform for designing, executing, verifying, analyzing, and improving AI-agent evaluations. Its signature capability is the Failure Attribution Engine: evidence-linked causal diagnosis, intervention validation, and cross-run reliability analysis.
 
@@ -13,7 +13,7 @@ The Workbench is a companion to, not a dependency of, the [CyberCore Agent Skill
 - Local-first CLI and evaluation workflow must not require Cloudflare credentials.
 - Cloudflare is the initial hosted control-plane target, behind provider interfaces.
 - Future workspace/tenant scoping is designed into records, but production multi-tenant isolation is not claimed or enabled by this design alone.
-- The Rust core provides shared domain-invariant validation, run-state projection, a provider-independent runner port, an in-memory evaluation/trial coordinator, and a Linux Bubblewrap local process runner prototype. The local runner is not a hardened VM: it has no aggregate cgroup memory/CPU/process-count quotas and does not export workspace files as artifacts. It must not be used for hostile public workloads. Do not pass secrets in task arguments or environment values because they are passed in the host-side Bubblewrap command line; captured stdout/stderr are also unredacted. Local persistence is provided by `crates/evaluation-store` (append-only SQLite records and a content-addressed evidence store); durable local scheduling is provided by `DurableScheduler` in the same crate; no hosted scheduler, hosted persistence adapter, API endpoints, CLI commands, MCP tools, or hosted service are implemented yet.
+- The Rust core provides shared domain-invariant validation, run-state projection, a provider-independent runner port, an in-memory evaluation/trial coordinator, and a Linux Bubblewrap local process runner prototype. The local runner is not a hardened VM: it has no aggregate cgroup memory/CPU/process-count quotas and does not export workspace files as artifacts. It must not be used for hostile public workloads. Do not pass secrets in task arguments or environment values because they are passed in the host-side Bubblewrap command line; captured stdout/stderr are also unredacted. Local persistence is provided by `crates/evaluation-store` (append-only SQLite records and a content-addressed evidence store); durable local scheduling is provided by `DurableScheduler` in the same crate; the local `workbench` CLI runs and inspects evaluations; no hosted scheduler, hosted persistence adapter, API endpoints, MCP tools, or hosted service are implemented yet.
 
 ## 🗺️ Start here
 
@@ -28,8 +28,9 @@ The Workbench is a companion to, not a dependency of, the [CyberCore Agent Skill
 9. [Runner protocol](docs/architecture/RUNNER-PROTOCOL.md)
 10. [Local process runner](docs/architecture/LOCAL-PROCESS-RUNNER.md)
 11. [Local persistence](crates/evaluation-store/README.md) ([ADR-0009](docs/decisions/0009-local-persistence.md))
-12. [Architecture decision records](docs/decisions/)
-13. [Current platform notes and source links](docs/research/current-platform-notes.md)
+12. [`workbench` CLI](crates/workbench-cli/README.md) ([ADR-0012](docs/decisions/0012-local-workbench-cli.md))
+13. [Architecture decision records](docs/decisions/)
+14. [Current platform notes and source links](docs/research/current-platform-notes.md)
 
 ## 🧪 Development setup
 

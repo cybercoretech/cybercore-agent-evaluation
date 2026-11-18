@@ -147,6 +147,15 @@ impl SqliteMetadataStore {
         Ok(outcome)
     }
 
+    /// The stored schedule for an evaluation, if one was created. Read-only.
+    pub fn get_schedule(&self, evaluation_id: &str) -> StoreResult<Option<EvaluationSchedule>> {
+        match self.load_schedule(evaluation_id) {
+            Ok(schedule) => Ok(Some(schedule)),
+            Err(StoreError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) fn load_schedule(&self, evaluation_id: &str) -> StoreResult<EvaluationSchedule> {
         let connection = self.lock()?;
         let (body, digest): (String, String) = connection

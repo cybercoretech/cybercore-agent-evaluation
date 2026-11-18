@@ -29,26 +29,26 @@ pub const INTERRUPTED_ATTEMPT_MESSAGE: &str =
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReservePayload {
-    trial_id: String,
-    identity: AttemptIdentity,
+pub(crate) struct ReservePayload {
+    pub(crate) trial_id: String,
+    pub(crate) identity: AttemptIdentity,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CompletePayload {
-    trial_id: String,
-    request_id: String,
-    result: Result<RunnerResult, RunnerError>,
+pub(crate) struct CompletePayload {
+    pub(crate) trial_id: String,
+    pub(crate) request_id: String,
+    pub(crate) result: Result<RunnerResult, RunnerError>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CancelPayload {
-    trial_id: String,
+pub(crate) struct CancelPayload {
+    pub(crate) trial_id: String,
 }
 
-enum Command {
+pub(crate) enum Command {
     Reserve(ReservePayload),
     Complete(CompletePayload),
     Cancel(CancelPayload),
@@ -87,6 +87,12 @@ impl Command {
             }
         })
     }
+}
+
+pub(crate) struct JournalEntry {
+    pub(crate) seq: i64,
+    pub(crate) command: Command,
+    pub(crate) recorded_at: String,
 }
 
 /// What `acquire` found and repaired.
@@ -141,7 +147,7 @@ impl SqliteMetadataStore {
         Ok(outcome)
     }
 
-    fn load_schedule(&self, evaluation_id: &str) -> StoreResult<EvaluationSchedule> {
+    pub(crate) fn load_schedule(&self, evaluation_id: &str) -> StoreResult<EvaluationSchedule> {
         let connection = self.lock()?;
         let (body, digest): (String, String) = connection
             .query_row(
@@ -162,9 +168,22 @@ impl SqliteMetadataStore {
     }
 
     fn load_journal(&self, evaluation_id: &str) -> StoreResult<Vec<(i64, Command)>> {
+        Ok(self
+            .load_journal_entries(evaluation_id)?
+            .into_iter()
+            .map(|entry| (entry.seq, entry.command))
+            .collect())
+    }
+
+    /// The journal in `seq` order with each entry's commit time. Fails with
+    /// `Integrity` on a gap or an unreadable payload.
+    pub(crate) fn load_journal_entries(
+        &self,
+        evaluation_id: &str,
+    ) -> StoreResult<Vec<JournalEntry>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare_cached(
-            "SELECT seq, command, payload FROM scheduler_journal
+            "SELECT seq, command, payload, recorded_at FROM scheduler_journal
              WHERE evaluation_id = ?1 ORDER BY seq",
         )?;
         let rows = statement.query_map(params![evaluation_id], |row| {
@@ -172,19 +191,24 @@ impl SqliteMetadataStore {
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
-        let mut commands = Vec::new();
+        let mut entries = Vec::new();
         for (expected, row) in (1_i64..).zip(rows) {
-            let (seq, name, payload) = row?;
+            let (seq, name, payload, recorded_at) = row?;
             if seq != expected {
                 return Err(StoreError::Integrity(format!(
                     "journal for {evaluation_id} has a gap at seq {expected}"
                 )));
             }
-            commands.push((seq, Command::parse(&name, &payload)?));
+            entries.push(JournalEntry {
+                seq,
+                command: Command::parse(&name, &payload)?,
+                recorded_at,
+            });
         }
-        Ok(commands)
+        Ok(entries)
     }
 }
 
@@ -438,6 +462,14 @@ impl<'s> DurableScheduler<'s> {
 
     pub fn owner(&self) -> &str {
         &self.owner
+    }
+
+    pub fn evaluation_id(&self) -> &str {
+        &self.evaluation_id
+    }
+
+    pub(crate) fn store(&self) -> &'s SqliteMetadataStore {
+        self.store
     }
 }
 

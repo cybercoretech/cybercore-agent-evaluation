@@ -7,6 +7,7 @@ Local persistence for the CyberCore Agent Evaluation Workbench: a SQLite metadat
 - **`SqliteMetadataStore`:** append-only records, validated against the embedded v0 contracts, with tamper-evident bodies, a reverse reference index, paging and idempotency keys.
 - **`FsArtifactStore`:** content-addressed, atomically written, verified-on-read evidence objects behind the `ArtifactStore` port.
 - **`DurableScheduler`:** the trial coordinator made crash-safe ([ADR-0010](../../docs/decisions/0010-durable-scheduling.md)). It keeps a write-ahead journal that is replayed after a restart, a lease with fencing tokens so only one scheduler drives an evaluation, attempt identities that are unique across processes, and interrupted attempts closed under the schedule's retry policy.
+- **`run_ready_trials`:** the scheduler loop ([ADR-0011](../../docs/decisions/0011-run-and-verification-records.md)). Each attempt goes reserve → execute → complete, and its resolved `run`, `run_event` and `verification_result` records are written in one transaction. Pass/fail comes only from a `Verifier`, never from the runner. Missing records are rebuilt from the journal after a crash.
 - **`LocalStore`:** both together, laid out as `<dir>/metadata.sqlite3` and `<dir>/evidence/`. It adds `put_evidence`, `read_evidence`, `reconcile` and `orphaned_objects`.
 
 ## 🚀 Use
@@ -43,6 +44,17 @@ while let Some(trial) = scheduler.coordinator().ready_trial_ids().first().cloned
 }
 scheduler.release()?;
 ```
+
+Or let the loop do it, records included:
+
+```rust
+use cybercore_evaluation_store::{run_ready_trials, RunRecorderConfig, StdoutEqualsVerifier};
+
+let config = RunRecorderConfig::for_runner(&runner, project_ref, /* store_output_evidence */ true);
+let report = run_ready_trials(&store, &mut scheduler, &runner, &config, &verifier, |trial, n| identity(trial, n)).await?;
+```
+
+Implement `Verifier` for your own criteria. `StdoutEqualsVerifier` is a deterministic reference implementation. Set `store_output_evidence` only when task outputs are non-sensitive: the local runner does not redact.
 
 `LeaseLost` means another scheduler took over: stop immediately. Use a stable owner name per host, so that a restarted process can take its own lease back at once.
 

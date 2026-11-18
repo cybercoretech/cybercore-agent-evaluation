@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/metrics/analysis-result.schema.json",
+  "title": "Evaluation Analysis Result",
+  "description": "Versioned analysis output for a single, explicit evaluation condition and population. Cross-condition comparisons are represented separately.",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "analysis_result"
+        },
+        "evaluation_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "evaluation_plan_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "benchmark_content_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "condition_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "system_fingerprint_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "task_population_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "population_key": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "analysis_state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "computed",
+            "reviewed",
+            "superseded",
+            "invalidated"
+          ]
+        },
+        "analysis_method_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "metric_result_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          },
+          "minItems": 1
+        },
+        "primary_metric_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "predeclared_plan_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "deviations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "impact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "approved_by": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "description",
+              "impact"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "exclusions_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "record_type",
+        "evaluation_ref",
+        "evaluation_plan_digest",
+        "benchmark_content_digest",
+        "condition_id",
+        "system_fingerprint_digest",
+        "task_population_digest",
+        "population_key",
+        "analysis_state",
+        "analysis_method_version",
+        "metric_result_refs",
+        "primary_metric_ids",
+        "predeclared_plan_digest",
+        "exclusions_summary",
+        "computed_at"
+      ]
+    }
+  ],
+  "unevaluatedProperties": false,
+  "type": "object"
+}

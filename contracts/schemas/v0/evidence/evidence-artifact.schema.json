@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evidence/evidence-artifact.schema.json",
+  "title": "Evidence Artifact",
+  "description": "Metadata and opaque object reference for immutable evidence content; availability is confirmed separately.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "evidence_artifact"
+        },
+        "project_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "source_record_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "artifact_kind": {
+          "type": "string",
+          "enum": [
+            "trace",
+            "event_batch",
+            "agent_output",
+            "tool_output",
+            "fixture",
+            "screenshot",
+            "report",
+            "log",
+            "recording",
+            "other"
+          ]
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "pending_upload",
+            "available",
+            "failed",
+            "deletion_pending",
+            "deleted"
+          ]
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "object_ref": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "redaction_state": {
+          "type": "string",
+          "enum": [
+            "not_assessed",
+            "not_required",
+            "redacted",
+            "pending"
+          ]
+        },
+        "redaction_reason": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "access_classification": {
+          "type": "string",
+          "enum": [
+            "restricted",
+            "project_internal",
+            "approved_external",
+            "public"
+          ]
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "policy_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retention_until": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "legal_hold": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "policy_id",
+            "legal_hold"
+          ],
+          "additionalProperties": false
+        },
+        "failure_reason": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "deletion_requested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "record_type",
+        "project_ref",
+        "source_record_ref",
+        "artifact_kind",
+        "lifecycle_state",
+        "redaction_state",
+        "access_classification",
+        "retention"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "available"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "object_ref",
+          "content_type",
+          "byte_length",
+          "sha256_digest",
+          "verified_at"
+        ],
+        "properties": {
+          "object_ref": {},
+          "content_type": {},
+          "byte_length": {},
+          "sha256_digest": {},
+          "verified_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "failure_reason"
+        ],
+        "properties": {
+          "failure_reason": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "deletion_pending",
+              "deleted"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "deletion_requested_at"
+        ],
+        "properties": {
+          "deletion_requested_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "deleted"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "deleted_at"
+        ],
+        "properties": {
+          "deleted_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "redaction_state": {
+            "const": "redacted"
+          }
+        },
+        "required": [
+          "redaction_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "redaction_reason"
+        ],
+        "properties": {
+          "redaction_reason": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "available"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "redaction_state": {
+            "enum": [
+              "not_required",
+              "redacted"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

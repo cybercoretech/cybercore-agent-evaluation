@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/metrics/metric-result.schema.json",
+  "title": "Metric Result",
+  "description": "One metric estimate for one explicitly identified evaluation condition and analysis population. Trial counts, not run attempts, define the sample denominator.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "metric_result"
+        },
+        "metric_definition_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "metric_definition_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "evaluation_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "evaluation_plan_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "benchmark_revision_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "benchmark_content_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "condition_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "system_fingerprint_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "task_population_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "population_key": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "aggregation_level": {
+          "type": "string",
+          "enum": [
+            "condition",
+            "benchmark",
+            "task_family",
+            "stratum"
+          ]
+        },
+        "stratum": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "result_status": {
+          "type": "string",
+          "enum": [
+            "computed",
+            "insufficient_data",
+            "descriptive_only",
+            "invalidated"
+          ]
+        },
+        "value_kind": {
+          "type": "string",
+          "enum": [
+            "binary_rate",
+            "numeric_summary",
+            "count",
+            "ratio"
+          ]
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "planned_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "eligible_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excluded_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missing_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "run_attempt_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pending_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "planned_trial_count",
+            "eligible_trial_count",
+            "excluded_trial_count",
+            "observed_trial_count",
+            "missing_trial_count",
+            "run_attempt_count",
+            "pending_trial_count"
+          ],
+          "additionalProperties": false
+        },
+        "numerator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimate": {
+          "type": "number"
+        },
+        "uncertainty": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "wilson",
+                "exact_binomial",
+                "bootstrap_percentile",
+                "bootstrap_bca",
+                "student_t",
+                "paired_bootstrap",
+                "cluster_bootstrap"
+              ]
+            },
+            "confidence_level": {
+              "type": "number",
+              "exclusiveMinimum": 0.5,
+              "exclusiveMaximum": 1
+            },
+            "lower_bound": {
+              "type": "number"
+            },
+            "upper_bound": {
+              "type": "number"
+            },
+            "standard_error": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "method",
+            "confidence_level",
+            "lower_bound",
+            "upper_bound"
+          ],
+          "additionalProperties": false
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "analysis_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "eligibility_policy_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      },
+      "required": [
+        "record_type",
+        "metric_definition_ref",
+        "metric_definition_digest",
+        "evaluation_ref",
+        "evaluation_plan_digest",
+        "benchmark_revision_ref",
+        "benchmark_content_digest",
+        "condition_id",
+        "system_fingerprint_digest",
+        "task_population_digest",
+        "population_key",
+        "aggregation_level",
+        "result_status",
+        "value_kind",
+        "counts",
+        "computed_at",
+        "analysis_version",
+        "eligibility_policy_digest"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "value_kind": {
+            "const": "binary_rate"
+          }
+        },
+        "required": [
+          "value_kind"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "properties": {
+          "numerator": {},
+          "denominator": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result_status": {
+            "const": "computed"
+          }
+        },
+        "required": [
+          "result_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "estimate"
+        ],
+        "properties": {
+          "estimate": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result_status": {
+            "const": "insufficient_data"
+          }
+        },
+        "required": [
+          "result_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "limitations"
+        ],
+        "properties": {
+          "limitations": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result_status": {
+            "const": "insufficient_data"
+          }
+        },
+        "required": [
+          "result_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "not": {
+          "required": [
+            "estimate"
+          ],
+          "type": "object",
+          "properties": {
+            "estimate": {}
+          }
+        }
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

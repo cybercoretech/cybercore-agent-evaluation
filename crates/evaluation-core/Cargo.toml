@@ -1,0 +1,12 @@
+[package]
+name = "cybercore-evaluation-core"
+version = "0.3.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.54", features = ["io-util", "macros", "process", "rt", "time"] }

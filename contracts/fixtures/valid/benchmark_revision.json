@@ -1,0 +1,86 @@
+{
+  "record_id": "BENCH-001",
+  "record_type": "benchmark_revision",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T12:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "cybercore-contract-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "benchmark-metrics-fixture"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "benchmark_key": "tool-use-reliability",
+  "revision": 1,
+  "lifecycle_state": "frozen",
+  "name": "Tool Use Reliability Benchmark",
+  "purpose": "Measure task completion and safe tool use across a bounded task population.",
+  "intended_workloads": [
+    "browser_research",
+    "repository_maintenance"
+  ],
+  "task_revision_refs": [
+    {
+      "record_id": "TASK-001",
+      "record_type": "task_revision"
+    },
+    {
+      "record_id": "TASK-002",
+      "record_type": "task_revision"
+    }
+  ],
+  "task_population_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sampling_frame": {
+    "population_description": "Curated tasks representing common repository and browser workflows.",
+    "selection_method": "stratified_random",
+    "selection_rationale": "Stratified by task family and risk tier.",
+    "strata": [
+      {
+        "name": "risk",
+        "levels": [
+          "low",
+          "medium"
+        ]
+      }
+    ],
+    "target_trial_count": 200
+  },
+  "grader_refs": [
+    {
+      "record_id": "GRADER-001",
+      "record_type": "grader"
+    }
+  ],
+  "ground_truth_refs": [
+    {
+      "record_id": "GT-001",
+      "record_type": "ground_truth"
+    }
+  ],
+  "audit": {
+    "status": "passed_with_limitations",
+    "audited_at": "2026-11-16T20:00:00Z",
+    "auditor": "benchmark-reviewer",
+    "findings": [
+      {
+        "severity": "low",
+        "category": "coverage",
+        "description": "Long-tail multi-agent handoff tasks are underrepresented."
+      }
+    ],
+    "contamination_assessment": "no_known_contamination",
+    "evidence_refs": [
+      {
+        "evidence_id": "AUDIT-EVID-001",
+        "evidence_type": "external_evidence",
+        "relationship": "supports",
+        "sha256_digest": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "frozen_at": "2026-11-17T12:00:00Z",
+  "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/decision/decision-record.schema.json",
+  "title": "Evaluation Decision Record",
+  "description": "Auditable, scope-bounded decision. Mandatory gates are non-compensatory and cannot be offset by aggregate scores.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "decision_record"
+        },
+        "decision_type": {
+          "type": "string",
+          "enum": [
+            "readiness",
+            "release",
+            "repair_priority",
+            "operational_scope"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "conditionally_approved",
+            "rejected",
+            "deferred",
+            "insufficient_evidence"
+          ]
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "system_fingerprint_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "workload_families": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "operating_conditions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            },
+            "autonomy_level": {
+              "type": "string",
+              "enum": [
+                "assisted",
+                "supervised",
+                "bounded_autonomous",
+                "high_autonomy"
+              ]
+            },
+            "excluded_scope": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            }
+          },
+          "required": [
+            "system_fingerprint_ref",
+            "workload_families",
+            "operating_conditions",
+            "autonomy_level"
+          ],
+          "additionalProperties": false
+        },
+        "gate_results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "gate_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "gate_category": {
+                "type": "string",
+                "enum": [
+                  "safety",
+                  "security",
+                  "privacy",
+                  "reliability",
+                  "capability",
+                  "operational",
+                  "compliance",
+                  "other"
+                ]
+              },
+              "mandatory": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "inconclusive",
+                  "not_applicable"
+                ]
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+                }
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "not_applicable_reason": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "gate_id",
+              "gate_category",
+              "mandatory",
+              "status",
+              "evidence_refs",
+              "rationale"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "not_applicable"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "then": {
+                  "required": [
+                    "not_applicable_reason"
+                  ],
+                  "properties": {
+                    "not_applicable_reason": {}
+                  },
+                  "type": "object"
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "pass",
+                        "fail"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "then": {
+                  "properties": {
+                    "evidence_refs": {
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            ],
+            "additionalProperties": false
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "review_by": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "record_type",
+        "decision_type",
+        "outcome",
+        "scope",
+        "gate_results",
+        "evidence_refs",
+        "reviewer",
+        "decided_at"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "approved",
+              "conditionally_approved"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "gate_results": {
+            "items": {
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "mandatory": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "mandatory"
+                    ],
+                    "type": "object"
+                  },
+                  "then": {
+                    "properties": {
+                      "status": {
+                        "const": "pass"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "conditionally_approved"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "conditions": {
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "conditions"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "rejected",
+              "deferred",
+              "insufficient_evidence"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

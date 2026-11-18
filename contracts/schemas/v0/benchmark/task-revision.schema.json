@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/benchmark/task-revision.schema.json",
+  "title": "Task Revision",
+  "description": "Immutable task definition with agent-visible inputs separated from evaluator-only material.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "task_revision"
+        },
+        "benchmark_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "task_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "validity_state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "valid",
+            "under_review",
+            "invalid",
+            "deprecated"
+          ]
+        },
+        "task_family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "agent_instruction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "input_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "reference": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "agent_visible",
+                  "evaluator_only"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "input_id",
+              "reference",
+              "visibility"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "permitted_tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "uniqueItems": true
+        },
+        "permitted_effects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "uniqueItems": true
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "criterion_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "verification_requirement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "criticality": {
+                "type": "string",
+                "enum": [
+                  "mandatory",
+                  "major",
+                  "minor"
+                ]
+              }
+            },
+            "required": [
+              "criterion_id",
+              "description",
+              "verification_requirement",
+              "criticality"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "prohibited_outcomes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "verification_plan": {
+          "type": "object",
+          "properties": {
+            "required_criterion_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "verifier_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "minItems": 1
+            },
+            "independent_verification_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "required_criterion_ids",
+            "verifier_refs",
+            "independent_verification_required"
+          ],
+          "additionalProperties": false
+        },
+        "difficulty_stratum": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "risk_stratum": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "validity_notes": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "hidden_evaluator_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        }
+      },
+      "required": [
+        "record_type",
+        "benchmark_ref",
+        "task_key",
+        "revision",
+        "validity_state",
+        "task_family",
+        "objective",
+        "agent_instruction",
+        "acceptance_criteria",
+        "verification_plan"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "validity_state": {
+            "enum": [
+              "under_review",
+              "invalid"
+            ]
+          }
+        },
+        "required": [
+          "validity_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "validity_notes"
+        ],
+        "properties": {
+          "validity_notes": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/system/system-fingerprint.schema.json",
+  "title": "System Fingerprint",
+  "description": "Immutable snapshot of the evaluated system configuration. Secret values must never be included.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "system_fingerprint"
+        },
+        "system_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "capture_completeness": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "model_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "routing_policy_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "inference_profile_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "safe_parameter_summary": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "provider",
+            "model_id"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "agent_runtime": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "agent_runtime_version": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "harness": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "harness_version": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "planner": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "orchestrator": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "agent_runtime"
+          ],
+          "additionalProperties": false
+        },
+        "instruction_assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "object",
+                "properties": {
+                  "asset_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "asset_type": {
+                    "type": "string",
+                    "enum": [
+                      "prompt",
+                      "skill",
+                      "tool",
+                      "adapter",
+                      "runtime",
+                      "model_config",
+                      "memory_config",
+                      "retrieval_corpus",
+                      "environment",
+                      "grader",
+                      "verifier",
+                      "other"
+                    ]
+                  },
+                  "revision": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "content_digest": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{64}$"
+                  },
+                  "uri": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "asset_id",
+                  "asset_type"
+                ],
+                "additionalProperties": false
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "system_instruction",
+                  "developer_instruction",
+                  "task_template",
+                  "policy",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "asset",
+              "role"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "object",
+                "properties": {
+                  "asset_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "asset_type": {
+                    "type": "string",
+                    "enum": [
+                      "prompt",
+                      "skill",
+                      "tool",
+                      "adapter",
+                      "runtime",
+                      "model_config",
+                      "memory_config",
+                      "retrieval_corpus",
+                      "environment",
+                      "grader",
+                      "verifier",
+                      "other"
+                    ]
+                  },
+                  "revision": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "content_digest": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{64}$"
+                  },
+                  "uri": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "asset_id",
+                  "asset_type"
+                ],
+                "additionalProperties": false
+              },
+              "discovery_mode": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "loading_configuration_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "platform_integration": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "asset"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "adapter_version": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "schema_digest": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "permissions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "uniqueItems": true
+              },
+              "identity_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "network_egress_policy_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "asset_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context": {
+          "type": "object",
+          "properties": {
+            "memory_configuration_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "retrieval_configuration_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "corpus_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              }
+            },
+            "embedding_configuration_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "context_window_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "context_policy_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            }
+          },
+          "additionalProperties": false
+        },
+        "environment": {
+          "type": "object",
+          "properties": {
+            "container_image_digest": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "operating_system": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "runtime_versions": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "dependency_lock_digest": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "fixture_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              }
+            },
+            "initial_state_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "resource_limits": {
+              "type": "object",
+              "properties": {
+                "cpu_millis": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "memory_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "disk_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "wall_time_seconds": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "network_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "network_policy_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            }
+          },
+          "additionalProperties": false
+        },
+        "evaluation_components": {
+          "type": "object",
+          "properties": {
+            "benchmark_revision_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            },
+            "grader_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              }
+            },
+            "verifier_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              }
+            },
+            "evaluator_version": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        },
+        "execution_policy": {
+          "type": "object",
+          "properties": {
+            "max_wall_time_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_tool_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_cost_microunits": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "concurrency_limit": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "stopping_policy_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            }
+          },
+          "additionalProperties": false
+        },
+        "unobserved_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "unobservable",
+                  "unavailable",
+                  "redacted",
+                  "not_applicable"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            },
+            "required": [
+              "field_path",
+              "state",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "fingerprint_notes": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "record_type",
+        "system_ref",
+        "capture_completeness",
+        "model",
+        "runtime",
+        "unobserved_dimensions"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "capture_completeness": {
+            "const": "complete"
+          }
+        },
+        "required": [
+          "capture_completeness"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "unobserved_dimensions": {
+            "maxItems": 0,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capture_completeness": {
+            "const": "partial"
+          }
+        },
+        "required": [
+          "capture_completeness"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "unobserved_dimensions": {
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

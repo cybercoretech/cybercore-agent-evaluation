@@ -1,0 +1,3 @@
+# Includes optional format validators (including RFC 3339 date-time checking).
+# `format-nongpl` avoids optional dependencies with GPL licensing.
+jsonschema[format-nongpl]>=4.18,<5

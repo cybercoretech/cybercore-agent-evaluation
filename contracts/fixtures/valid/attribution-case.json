@@ -1,0 +1,181 @@
+{
+  "record_id": "ATTR-0001",
+  "record_type": "attribution_case",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T20:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "contract-fixture",
+      "component_version": "0.2.0",
+      "origin_id": "domain-contracts-001"
+    },
+    "captured_by": "contract-fixture",
+    "capture_version": "0.2.0"
+  },
+  "failure_refs": [
+    {
+      "record_id": "FAIL-0001",
+      "record_type": "failure"
+    }
+  ],
+  "status": "provisional",
+  "decisive_event_refs": [
+    {
+      "record_id": "EVENT-0008",
+      "record_type": "run_event"
+    }
+  ],
+  "gap_node_refs": {
+    "detection": [
+      "GAP-DET-1"
+    ],
+    "containment": [],
+    "reporting": [
+      "GAP-REP-1"
+    ]
+  },
+  "hypotheses": [
+    {
+      "hypothesis_id": "HYP-1",
+      "category": "tool_contract_adapter",
+      "claim": "Workspace root resolution selected the wrong repository.",
+      "status": "active",
+      "confidence": "medium",
+      "supporting_evidence": [
+        {
+          "evidence_id": "ART-0009",
+          "evidence_type": "evidence_artifact",
+          "relationship": "supports"
+        }
+      ],
+      "contradicting_evidence": [],
+      "alternative_hypothesis_ids": [],
+      "next_test": "Run a controlled test with an explicit repository root."
+    }
+  ],
+  "causal_graph": {
+    "graph_id": "GRAPH-0001",
+    "revision": 1,
+    "nodes": [
+      {
+        "node_id": "EV-1",
+        "node_type": "event",
+        "label": "Write operation returned success.",
+        "source_refs": [
+          {
+            "evidence_id": "ART-0008",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "certainty": "observed"
+      },
+      {
+        "node_id": "FAIL-1",
+        "node_type": "failure",
+        "label": "Requested workspace remained unchanged.",
+        "source_refs": [
+          {
+            "evidence_id": "ART-0009",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "certainty": "observed"
+      },
+      {
+        "node_id": "GAP-DET-1",
+        "node_type": "detection_gap",
+        "label": "Post-write verifier did not detect the mismatch.",
+        "source_refs": [
+          {
+            "evidence_id": "ART-0010",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "certainty": "observed"
+      },
+      {
+        "node_id": "GAP-REP-1",
+        "node_type": "reporting_gap",
+        "label": "Completion report omitted the failed write.",
+        "source_refs": [
+          {
+            "evidence_id": "ART-0011",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "certainty": "observed"
+      },
+      {
+        "node_id": "ASSET-1",
+        "node_type": "asset",
+        "label": "Workspace adapter revision 1.",
+        "source_refs": [
+          {
+            "evidence_id": "ART-0012",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "certainty": "observed"
+      }
+    ],
+    "edges": [
+      {
+        "edge_id": "EDGE-1",
+        "source_node": "ASSET-1",
+        "target_node": "FAIL-1",
+        "relationship": "contributed_to",
+        "supporting_evidence": [
+          {
+            "evidence_id": "ART-0009",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "rationale": "Adapter resolved the wrong root.",
+        "confidence": "medium"
+      },
+      {
+        "edge_id": "EDGE-2",
+        "source_node": "FAIL-1",
+        "target_node": "GAP-DET-1",
+        "relationship": "escaped_detection",
+        "supporting_evidence": [
+          {
+            "evidence_id": "ART-0010",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "rationale": "The verification step did not recognize the wrong target.",
+        "confidence": "high"
+      },
+      {
+        "edge_id": "EDGE-3",
+        "source_node": "FAIL-1",
+        "target_node": "GAP-REP-1",
+        "relationship": "misreported_as",
+        "supporting_evidence": [
+          {
+            "evidence_id": "ART-0011",
+            "evidence_type": "evidence_artifact",
+            "relationship": "supports"
+          }
+        ],
+        "rationale": "The final report omitted the material failure.",
+        "confidence": "high"
+      }
+    ]
+  },
+  "limitations": [
+    "Original process environment was not completely captured."
+  ],
+  "next_actions": [
+    "Capture the adapter working directory in the next run."
+  ]
+}

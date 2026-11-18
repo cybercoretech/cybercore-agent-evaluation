@@ -1,0 +1,16 @@
+{
+  "kind": "decision_gates",
+  "outcome": "approved",
+  "gate_results": [
+    {
+      "gate_id": "S1",
+      "mandatory": true,
+      "status": "pass"
+    },
+    {
+      "gate_id": "R1",
+      "mandatory": false,
+      "status": "inconclusive"
+    }
+  ]
+}

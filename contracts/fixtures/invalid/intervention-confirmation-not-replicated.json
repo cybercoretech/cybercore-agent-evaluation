@@ -1,0 +1,74 @@
+{
+  "record_id": "INT-BAD-1",
+  "record_type": "intervention",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T20:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "contract-fixture",
+      "component_version": "0.2.0",
+      "origin_id": "domain-contracts-001"
+    },
+    "captured_by": "contract-fixture",
+    "capture_version": "0.2.0"
+  },
+  "attribution_case_ref": {
+    "record_id": "ATTR-0001",
+    "record_type": "attribution_case"
+  },
+  "hypothesis_id": "HYP-1",
+  "purpose": "causal_confirmation",
+  "lifecycle_state": "approved",
+  "target_assets": [
+    {
+      "asset_ref": {
+        "record_id": "ASSET-ADAPTER-1",
+        "record_type": "system_asset"
+      },
+      "before_revision": "1.0.0",
+      "proposed_revision": "1.0.1",
+      "change_summary": "Resolve repository root from explicit invocation context."
+    }
+  ],
+  "design": {
+    "control_condition": "Adapter revision 1.0.0 with current path resolution.",
+    "treatment_condition": "Adapter revision 1.0.1 with explicit root resolution.",
+    "changed_factor_count": 1,
+    "planned_trials": 1,
+    "sampling_unit": "same task revision and isolated workspace per trial",
+    "randomization": "blocked_randomized",
+    "independent_verification_required": true,
+    "primary_metric_ids": [
+      "wrong_workspace_write_rate"
+    ],
+    "isolation_and_safety": "Use disposable repositories, no production credentials, and deny external network egress."
+  },
+  "approval": {
+    "status": "approved",
+    "approver": "human-reviewer",
+    "approved_at": "2026-11-17T20:05:00Z",
+    "rationale": "Isolated test only.",
+    "rollback_plan": "Restore adapter revision 1.0.0."
+  },
+  "safety_review": {
+    "status": "approved",
+    "reviewer": "security-reviewer",
+    "reviewed_at": "2026-11-17T20:04:00Z",
+    "rationale": "Disposable workspaces and bounded local execution.",
+    "risk_controls": [
+      "No production credentials",
+      "No external network egress"
+    ]
+  },
+  "trial_refs": [
+    {
+      "record_id": "TRIAL-INT-1",
+      "record_type": "trial"
+    },
+    {
+      "record_id": "TRIAL-INT-2",
+      "record_type": "trial"
+    }
+  ]
+}

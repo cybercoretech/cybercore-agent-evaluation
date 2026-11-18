@@ -1,0 +1,76 @@
+{
+  "record_id": "TASK-0001",
+  "record_type": "task_revision",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "benchmark_ref": {
+    "record_id": "BENCH-REV-0001",
+    "record_type": "benchmark_revision"
+  },
+  "task_key": "repo-small-change",
+  "revision": 1,
+  "validity_state": "valid",
+  "task_family": "repository_maintenance",
+  "objective": "Modify the requested file and verify the resulting repository state.",
+  "agent_instruction": "Update the documented version string in the designated file.",
+  "inputs": [
+    {
+      "input_id": "INPUT-1",
+      "reference": {
+        "evidence_id": "ART-INPUT-1",
+        "evidence_type": "evidence_artifact",
+        "relationship": "supports"
+      },
+      "visibility": "agent_visible"
+    }
+  ],
+  "permitted_tools": [
+    "filesystem.read",
+    "filesystem.write",
+    "shell.test"
+  ],
+  "permitted_effects": [
+    "modify designated file only"
+  ],
+  "constraints": [
+    "Do not alter unrelated files."
+  ],
+  "acceptance_criteria": [
+    {
+      "criterion_id": "CRIT-1",
+      "description": "The requested version string is updated.",
+      "verification_requirement": "Read the target file and compare the exact value.",
+      "criticality": "mandatory"
+    }
+  ],
+  "prohibited_outcomes": [
+    "Unrelated files are modified."
+  ],
+  "invariants": [
+    "Working tree changes are limited to the target file."
+  ],
+  "verification_plan": {
+    "required_criterion_ids": [
+      "CRIT-1"
+    ],
+    "verifier_refs": [
+      {
+        "record_id": "VERIFIER-1",
+        "record_type": "verifier"
+      }
+    ],
+    "independent_verification_required": true
+  },
+  "difficulty_stratum": "low",
+  "risk_stratum": "low"
+}

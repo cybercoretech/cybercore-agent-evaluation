@@ -1,0 +1,37 @@
+{
+  "record_id": "RUN-BAD-1",
+  "record_type": "run",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "evaluation_ref": {
+    "record_id": "EVAL-0001",
+    "record_type": "evaluation"
+  },
+  "trial_ref": {
+    "record_id": "TRIAL-0001",
+    "record_type": "trial"
+  },
+  "task_revision_ref": {
+    "record_id": "TASK-0001",
+    "record_type": "task_revision"
+  },
+  "attempt_number": 1,
+  "attempt_kind": "initial",
+  "runner": {
+    "runner_id": "runner",
+    "runner_type": "local"
+  },
+  "execution_status": "created",
+  "run_outcome": "pending",
+  "verification_state": "not_started"
+}

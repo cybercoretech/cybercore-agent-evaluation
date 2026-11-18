@@ -1,0 +1,83 @@
+{
+  "record_id": "PLAN-BAD-1",
+  "record_type": "evaluation_plan",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "plan_key": "bad-plan",
+  "revision": 1,
+  "lifecycle_state": "frozen",
+  "decision_question": "Test",
+  "workload_scope": {
+    "description": "Test",
+    "task_families": [
+      "test"
+    ],
+    "operating_conditions": [
+      "local"
+    ]
+  },
+  "system_fingerprint_refs": [
+    {
+      "record_id": "FP-0001",
+      "record_type": "system_fingerprint"
+    }
+  ],
+  "benchmark_revision_ref": {
+    "record_id": "BR-1",
+    "record_type": "benchmark_revision"
+  },
+  "conditions": [
+    {
+      "condition_id": "BASE",
+      "role": "baseline",
+      "system_fingerprint_ref": {
+        "record_id": "FP-0001",
+        "record_type": "system_fingerprint"
+      }
+    }
+  ],
+  "sampling": {
+    "sampling_unit": "task_condition_replicate",
+    "task_selection_method": "curated",
+    "planned_trial_count": 1,
+    "replicates_per_task_condition": 1,
+    "randomization_method": "none",
+    "concurrency": 1
+  },
+  "retry_policy": {
+    "max_run_attempts_per_trial": 1,
+    "retryable_reasons": [],
+    "eligible_attempt_selection": "first_valid_attempt",
+    "replay_policy": "new_trial_required"
+  },
+  "metrics": [
+    {
+      "metric_id": "M1",
+      "role": "primary",
+      "definition_ref": {
+        "record_id": "M1",
+        "record_type": "metric_definition"
+      },
+      "aggregation": "proportion"
+    }
+  ],
+  "analysis_plan": {
+    "primary_metric_ids": [
+      "M1"
+    ],
+    "uncertainty_method": "none",
+    "missing_data_policy": "none",
+    "exclusion_policy": "none"
+  },
+  "frozen_at": "2026-11-17T19:00:00Z"
+}

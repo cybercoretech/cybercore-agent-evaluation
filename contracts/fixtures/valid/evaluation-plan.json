@@ -1,0 +1,105 @@
+{
+  "record_id": "PLAN-0001",
+  "record_type": "evaluation_plan",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "plan_key": "repo-maintenance-smoke",
+  "revision": 1,
+  "lifecycle_state": "frozen",
+  "decision_question": "Does the configured agent complete a bounded repository edit safely and correctly?",
+  "workload_scope": {
+    "description": "Small, deterministic repository maintenance tasks.",
+    "task_families": [
+      "repository_maintenance"
+    ],
+    "operating_conditions": [
+      "isolated local workspace"
+    ]
+  },
+  "system_fingerprint_refs": [
+    {
+      "record_id": "FP-0001",
+      "record_type": "system_fingerprint"
+    }
+  ],
+  "benchmark_revision_ref": {
+    "record_id": "BENCH-REV-0001",
+    "record_type": "benchmark_revision"
+  },
+  "conditions": [
+    {
+      "condition_id": "BASE",
+      "role": "baseline",
+      "system_fingerprint_ref": {
+        "record_id": "FP-0001",
+        "record_type": "system_fingerprint"
+      },
+      "description": "Baseline configuration"
+    }
+  ],
+  "sampling": {
+    "sampling_unit": "task_condition_replicate",
+    "task_selection_method": "curated",
+    "planned_trial_count": 1,
+    "replicates_per_task_condition": 1,
+    "randomization_method": "none",
+    "concurrency": 1
+  },
+  "retry_policy": {
+    "max_run_attempts_per_trial": 2,
+    "retryable_reasons": [
+      "runner_unavailable",
+      "transient_infrastructure_error"
+    ],
+    "eligible_attempt_selection": "first_valid_attempt",
+    "replay_policy": "separate_non_sample_replay"
+  },
+  "metrics": [
+    {
+      "metric_id": "METRIC-PASS",
+      "role": "primary",
+      "definition_ref": {
+        "record_id": "METRIC-DEF-1",
+        "record_type": "metric_definition"
+      },
+      "aggregation": "proportion",
+      "unit": "ratio"
+    }
+  ],
+  "analysis_plan": {
+    "primary_metric_ids": [
+      "METRIC-PASS"
+    ],
+    "uncertainty_method": "Report numerator and denominator; interval deferred for n=1.",
+    "missing_data_policy": "Mark unresolved trials explicitly; do not impute passes.",
+    "exclusion_policy": "Exclude only with a documented invalidation reason.",
+    "stopping_rules": [
+      "Stop after all planned trials resolve."
+    ],
+    "decision_gates": [
+      "All mandatory criteria must pass."
+    ]
+  },
+  "budgets": {
+    "max_wall_time_seconds": 300,
+    "max_tokens": 50000,
+    "max_cost_microunits": 1000000,
+    "max_tool_calls_per_run": 100
+  },
+  "required_approvals": [],
+  "safety_constraints": [
+    "Use disposable workspace."
+  ],
+  "frozen_at": "2026-11-17T19:05:00Z",
+  "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

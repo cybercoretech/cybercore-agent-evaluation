@@ -1,0 +1,101 @@
+{
+  "record_id": "PASS-BAD-1",
+  "record_type": "capability_passport",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T20:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "contract-fixture",
+      "component_version": "0.2.0",
+      "origin_id": "domain-contracts-001"
+    },
+    "captured_by": "contract-fixture",
+    "capture_version": "0.2.0"
+  },
+  "passport_status": "active",
+  "system_fingerprint_ref": {
+    "record_id": "FP-0001",
+    "record_type": "system_fingerprint"
+  },
+  "readiness_decision_ref": {
+    "record_id": "DEC-0001",
+    "record_type": "decision_record"
+  },
+  "scope": {
+    "workload_families": [
+      "repository-maintenance"
+    ],
+    "task_families": [
+      "file-editing",
+      "documentation-updates"
+    ],
+    "operating_conditions": [
+      "isolated local workspace"
+    ],
+    "autonomy_level": "supervised",
+    "permitted_effects": [
+      "read files",
+      "modify approved repository files"
+    ],
+    "excluded_effects": [
+      "production deployment",
+      "secret access"
+    ]
+  },
+  "evaluation_refs": [
+    {
+      "record_id": "EVAL-0001",
+      "record_type": "evaluation"
+    }
+  ],
+  "attribution_refs": [
+    {
+      "record_id": "ATTR-0001",
+      "record_type": "attribution_case"
+    }
+  ],
+  "trial_summary": {
+    "planned_trials": 10,
+    "eligible_trials": 9,
+    "excluded_trials": 1,
+    "resolved_trials": 8,
+    "pass_trials": 6,
+    "fail_trials": 1,
+    "mixed_trials": 1,
+    "inconclusive_trials": 0,
+    "run_attempts": 11
+  },
+  "capability_dimensions": [
+    {
+      "dimension_id": "workspace_accuracy",
+      "description": "Targets requested repository and workspace.",
+      "eligible_trials": 8,
+      "pass_trials": 6,
+      "fail_trials": 1,
+      "inconclusive_trials": 1,
+      "uncertainty_summary": "Small sample; do not treat as a calibrated reliability probability.",
+      "evidence_refs": [
+        {
+          "evidence_id": "ART-0030",
+          "evidence_type": "evidence_artifact",
+          "relationship": "supports"
+        }
+      ]
+    }
+  ],
+  "known_failure_refs": [
+    {
+      "record_id": "FAIL-0001",
+      "record_type": "failure"
+    }
+  ],
+  "limitations": [
+    "Evaluation used synthetic repositories only."
+  ],
+  "permitted_use_constraints": [
+    "Human approval required for destructive changes."
+  ],
+  "issued_at": "2026-11-17T20:40:00Z",
+  "review_by": "2026-12-10T00:00:00Z"
+}

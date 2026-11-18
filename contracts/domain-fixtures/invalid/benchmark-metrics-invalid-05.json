@@ -1,0 +1,74 @@
+{
+  "kind": "comparison_design",
+  "comparison": {
+    "record_id": "COMPARE-001",
+    "record_type": "comparison_result",
+    "schema_version": "0.1.0",
+    "created_at": "2026-11-17T12:00:00Z",
+    "provenance": {
+      "source": {
+        "system": "cybercore-contract-fixture",
+        "component": "fixture-author",
+        "component_version": "0.1.0",
+        "origin_id": "benchmark-metrics-fixture"
+      },
+      "captured_by": "fixture-author",
+      "capture_version": "0.1.0"
+    },
+    "metric_definition_ref": {
+      "record_id": "METRIC-001",
+      "record_type": "metric_definition"
+    },
+    "metric_definition_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "baseline_metric_result_ref": {
+      "record_id": "RESULT-BASE",
+      "record_type": "metric_result"
+    },
+    "treatment_metric_result_ref": {
+      "record_id": "RESULT-TREAT",
+      "record_type": "metric_result"
+    },
+    "baseline_condition_id": "baseline",
+    "treatment_condition_id": "treatment",
+    "comparison_status": "comparable",
+    "comparison_design": "randomized_paired",
+    "comparability": {
+      "benchmark_content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "task_population_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "metric_definition_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "eligibility_policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "aggregation_level": "condition",
+      "mismatch_dimensions": [],
+      "limitations": []
+    },
+    "sample_sizes": {
+      "baseline_trial_count": 80,
+      "treatment_trial_count": 80,
+      "matched_pair_count": 81
+    },
+    "inferential_status": "confirmatory",
+    "effect": {
+      "estimate": 0.075,
+      "unit": "proportion_difference",
+      "direction_interpretation": "favors_treatment",
+      "interval": {
+        "method": "paired_bootstrap",
+        "confidence_level": 0.95,
+        "lower_bound": 0.02,
+        "upper_bound": 0.13
+      }
+    },
+    "inference": {
+      "method": "paired_permutation_test",
+      "p_value": 0.012,
+      "multiplicity_method": "holm",
+      "comparison_family_size": 3,
+      "practical_significance_threshold": 0.03,
+      "practical_significance": "meaningful"
+    },
+    "limitations": [
+      "The result applies only to the specified task population and fingerprints."
+    ],
+    "computed_at": "2026-11-17T12:20:00Z"
+  }
+}

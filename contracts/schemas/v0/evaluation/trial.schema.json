@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evaluation/trial.schema.json",
+  "title": "Evaluation Trial",
+  "description": "One planned sampling unit. Additional run attempts do not create additional trial samples.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "trial"
+        },
+        "evaluation_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "plan_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "sampling_unit_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task_revision_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "condition_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "replicate_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stratum": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "assigned_order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "randomization_block": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "ready",
+            "assigned",
+            "executing",
+            "resolving",
+            "resolved",
+            "invalidated"
+          ]
+        },
+        "analysis_eligibility": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "eligible",
+            "excluded",
+            "invalidated"
+          ]
+        },
+        "eligibility_reason": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "run_attempt_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          }
+        },
+        "primary_run_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "resolved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "invalidated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "invalidation_reason": {
+          "type": "string",
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "record_type",
+        "evaluation_ref",
+        "plan_ref",
+        "sampling_unit_key",
+        "task_revision_ref",
+        "condition_id",
+        "replicate_index",
+        "lifecycle_state",
+        "analysis_eligibility"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "resolved"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "resolved_at"
+        ],
+        "properties": {
+          "resolved_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "invalidated"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "invalidated_at",
+          "invalidation_reason"
+        ],
+        "properties": {
+          "invalidated_at": {},
+          "invalidation_reason": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "invalidated"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "analysis_eligibility": {
+            "const": "invalidated"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "resolved"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "analysis_eligibility": {
+            "enum": [
+              "eligible",
+              "excluded"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

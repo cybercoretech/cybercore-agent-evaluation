@@ -1,0 +1,22 @@
+{
+  "kind": "attribution_confirmation",
+  "status": "confirmed",
+  "confirmation": {
+    "basis": "direct_mechanistic_evidence",
+    "mechanism_description": "A deterministic path mapping defect selected a different repository root.",
+    "mechanism_evidence_refs": [
+      {
+        "evidence_id": "ART-MECH-1",
+        "evidence_type": "evidence_artifact",
+        "relationship": "supports"
+      }
+    ],
+    "evidence_refs": [
+      {
+        "evidence_id": "ART-MECH-1",
+        "evidence_type": "evidence_artifact",
+        "relationship": "supports"
+      }
+    ]
+  }
+}

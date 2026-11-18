@@ -1,0 +1,66 @@
+{
+  "kind": "metric_result_arithmetic",
+  "result": {
+    "record_id": "RESULT-ZERO-DENOMINATOR",
+    "record_type": "metric_result",
+    "schema_version": "0.1.0",
+    "created_at": "2026-11-17T12:00:00Z",
+    "provenance": {
+      "source": {
+        "system": "cybercore-contract-fixture",
+        "component": "fixture-author",
+        "component_version": "0.1.0",
+        "origin_id": "benchmark-metrics-fixture"
+      },
+      "captured_by": "fixture-author",
+      "capture_version": "0.1.0"
+    },
+    "metric_definition_ref": {
+      "record_id": "METRIC-001",
+      "record_type": "metric_definition"
+    },
+    "metric_definition_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "evaluation_ref": {
+      "record_id": "EVAL-001",
+      "record_type": "evaluation"
+    },
+    "evaluation_plan_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "benchmark_revision_ref": {
+      "record_id": "BENCH-001",
+      "record_type": "benchmark_revision"
+    },
+    "benchmark_content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "condition_id": "baseline",
+    "system_fingerprint_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "task_population_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "population_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "aggregation_level": "condition",
+    "result_status": "computed",
+    "value_kind": "binary_rate",
+    "counts": {
+      "planned_trial_count": 10,
+      "eligible_trial_count": 10,
+      "excluded_trial_count": 0,
+      "observed_trial_count": 0,
+      "missing_trial_count": 10,
+      "run_attempt_count": 10,
+      "pending_trial_count": 0
+    },
+    "numerator": 0,
+    "denominator": 0,
+    "estimate": 0.0,
+    "uncertainty": {
+      "method": "wilson",
+      "confidence_level": 0.95,
+      "lower_bound": 0.742,
+      "upper_bound": 0.891
+    },
+    "limitations": [
+      "Two eligible trials have no verification disposition."
+    ],
+    "computed_at": "2026-11-17T12:10:00Z",
+    "analysis_version": "0.1.0",
+    "eligibility_policy_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "metric_kind": "binary_rate"
+}

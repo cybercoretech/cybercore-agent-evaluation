@@ -1,0 +1,42 @@
+{
+  "record_id": "ANALYSIS-NO-PRIMARY",
+  "record_type": "analysis_result",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T12:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "cybercore-contract-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "benchmark-metrics-fixture"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "evaluation_ref": {
+    "record_id": "EVAL-001",
+    "record_type": "evaluation"
+  },
+  "evaluation_plan_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "benchmark_content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "condition_id": "baseline",
+  "system_fingerprint_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "task_population_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "population_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "analysis_state": "computed",
+  "analysis_method_version": "0.1.0",
+  "metric_result_refs": [
+    {
+      "record_id": "RESULT-001",
+      "record_type": "metric_result"
+    }
+  ],
+  "primary_metric_ids": [],
+  "predeclared_plan_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "deviations": [],
+  "exclusions_summary": "Four trials were excluded under the predeclared eligibility policy.",
+  "limitations": [
+    "Two eligible trials lack a verification disposition."
+  ],
+  "computed_at": "2026-11-17T12:11:00Z"
+}

@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evaluation/evaluation-plan.schema.json",
+  "title": "Evaluation Plan",
+  "description": "Versioned experimental design. A frozen plan is immutable; corrections require a new revision.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "evaluation_plan"
+        },
+        "plan_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "validating",
+            "frozen",
+            "invalid",
+            "superseded"
+          ]
+        },
+        "decision_question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "workload_scope": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "task_families": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "operating_conditions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "description",
+            "task_families",
+            "operating_conditions"
+          ],
+          "additionalProperties": false
+        },
+        "system_fingerprint_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          },
+          "minItems": 1
+        },
+        "benchmark_revision_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "condition_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "baseline",
+                  "control",
+                  "treatment",
+                  "comparison"
+                ]
+              },
+              "system_fingerprint_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "condition_id",
+              "role",
+              "system_fingerprint_ref"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "sampling": {
+          "type": "object",
+          "properties": {
+            "sampling_unit": {
+              "const": "task_condition_replicate"
+            },
+            "task_selection_method": {
+              "type": "string",
+              "enum": [
+                "census",
+                "random",
+                "stratified_random",
+                "curated",
+                "other"
+              ]
+            },
+            "planned_trial_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "replicates_per_task_condition": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "strata": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "levels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "levels"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "randomization_method": {
+              "type": "string",
+              "enum": [
+                "none",
+                "simple",
+                "blocked",
+                "paired",
+                "seeded_custom"
+              ]
+            },
+            "random_seed": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "concurrency": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "sampling_unit",
+            "task_selection_method",
+            "planned_trial_count",
+            "replicates_per_task_condition",
+            "randomization_method",
+            "concurrency"
+          ],
+          "additionalProperties": false
+        },
+        "retry_policy": {
+          "type": "object",
+          "properties": {
+            "max_run_attempts_per_trial": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "retryable_reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "uniqueItems": true
+            },
+            "eligible_attempt_selection": {
+              "type": "string",
+              "enum": [
+                "first_valid_attempt",
+                "last_valid_attempt",
+                "predeclared_selector"
+              ]
+            },
+            "replay_policy": {
+              "type": "string",
+              "enum": [
+                "prohibited",
+                "separate_non_sample_replay",
+                "new_trial_required"
+              ]
+            }
+          },
+          "required": [
+            "max_run_attempts_per_trial",
+            "retryable_reasons",
+            "eligible_attempt_selection",
+            "replay_policy"
+          ],
+          "additionalProperties": false
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "metric_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "guardrail",
+                  "diagnostic"
+                ]
+              },
+              "definition_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "aggregation": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "unit": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "metric_id",
+              "role",
+              "definition_ref",
+              "aggregation"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "analysis_plan": {
+          "type": "object",
+          "properties": {
+            "primary_metric_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "uncertainty_method": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "missing_data_policy": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "exclusion_policy": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "stopping_rules": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "decision_gates": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          },
+          "required": [
+            "primary_metric_ids",
+            "uncertainty_method",
+            "missing_data_policy",
+            "exclusion_policy"
+          ],
+          "additionalProperties": false
+        },
+        "budgets": {
+          "type": "object",
+          "properties": {
+            "max_wall_time_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_cost_microunits": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_tool_calls_per_run": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "required_approvals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "uniqueItems": true
+        },
+        "safety_constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "frozen_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "supersedes_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "validation_issues": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      },
+      "required": [
+        "record_type",
+        "plan_key",
+        "revision",
+        "lifecycle_state"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "frozen"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "frozen_at",
+          "content_digest",
+          "decision_question",
+          "workload_scope",
+          "system_fingerprint_refs",
+          "benchmark_revision_ref",
+          "conditions",
+          "sampling",
+          "retry_policy",
+          "metrics",
+          "analysis_plan"
+        ],
+        "properties": {
+          "frozen_at": {},
+          "content_digest": {},
+          "decision_question": {},
+          "workload_scope": {},
+          "system_fingerprint_refs": {},
+          "benchmark_revision_ref": {},
+          "conditions": {},
+          "sampling": {},
+          "retry_policy": {},
+          "metrics": {},
+          "analysis_plan": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

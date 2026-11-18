@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json",
+  "title": "Persisted Record Envelope",
+  "description": "Shared identity, schema version, timestamp, and provenance fields for persisted Workbench records.",
+  "type": "object",
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "record_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^0\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "provenance": {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/provenance.schema.json"
+    }
+  },
+  "required": [
+    "record_id",
+    "record_type",
+    "schema_version",
+    "created_at",
+    "provenance"
+  ]
+}

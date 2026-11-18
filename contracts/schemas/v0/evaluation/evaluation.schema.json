@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evaluation/evaluation.schema.json",
+  "title": "Evaluation Campaign",
+  "description": "Campaign execution record. Progress counts are derived projections, not authoritative run outcomes.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "evaluation"
+        },
+        "evaluation_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "plan_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "plan_content_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "created",
+            "queued",
+            "preparing",
+            "running",
+            "finalizing",
+            "completed",
+            "partial",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "cancel_reason": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "runtime_overrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "original_value_digest": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "override_value_digest": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "progress_projection": {
+          "type": "object",
+          "properties": {
+            "planned_trials": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "resolved_trials": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "invalidated_trials": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unresolved_trials": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "projection_as_of": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "planned_trials",
+            "resolved_trials",
+            "invalidated_trials",
+            "unresolved_trials",
+            "projection_as_of"
+          ],
+          "additionalProperties": false
+        },
+        "failure_reason": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "record_type",
+        "evaluation_key",
+        "plan_ref",
+        "plan_content_digest",
+        "lifecycle_state"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "running",
+              "finalizing",
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "started_at"
+        ],
+        "properties": {
+          "started_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "completed",
+              "partial",
+              "failed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "ended_at"
+        ],
+        "properties": {
+          "ended_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "cancelled"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "cancel_reason"
+        ],
+        "properties": {
+          "cancel_reason": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "failure_reason"
+        ],
+        "properties": {
+          "failure_reason": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

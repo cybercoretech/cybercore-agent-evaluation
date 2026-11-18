@@ -1,0 +1,37 @@
+{
+  "record_id": "FP-0001",
+  "record_type": "system_fingerprint",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "system_ref": {
+    "record_id": "SYS-0001",
+    "record_type": "system"
+  },
+  "capture_completeness": "partial",
+  "model": {
+    "provider": "example-provider",
+    "model_id": "example-model",
+    "version": "2026-10"
+  },
+  "runtime": {
+    "agent_runtime": "example-agent-runtime",
+    "agent_runtime_version": "0.8.0"
+  },
+  "unobserved_dimensions": [
+    {
+      "field_path": "model.internal_routing",
+      "state": "unobservable",
+      "reason": "Provider does not expose this configuration."
+    }
+  ]
+}

@@ -1,0 +1,431 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/intervention/intervention.schema.json",
+  "title": "Controlled Intervention",
+  "description": "Versioned, approved experiment for diagnosis or repair validation. Causal-confirmation designs require replication and a controlled comparison.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "intervention"
+        },
+        "attribution_case_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "hypothesis_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "diagnostic",
+            "repair_validation",
+            "causal_confirmation"
+          ]
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "approved",
+            "ready",
+            "running",
+            "analyzing",
+            "completed",
+            "refuted",
+            "inconclusive",
+            "aborted",
+            "rolled_back"
+          ]
+        },
+        "target_assets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "asset_ref": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+              },
+              "before_revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "proposed_revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "change_summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "asset_ref",
+              "before_revision",
+              "proposed_revision",
+              "change_summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "design": {
+          "type": "object",
+          "properties": {
+            "control_condition": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "treatment_condition": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "changed_factor_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "planned_trials": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sampling_unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "randomization": {
+              "type": "string",
+              "enum": [
+                "randomized",
+                "blocked_randomized",
+                "counterbalanced",
+                "not_randomized_with_rationale"
+              ]
+            },
+            "independent_verification_required": {
+              "type": "boolean"
+            },
+            "primary_metric_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "isolation_and_safety": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "required": [
+            "control_condition",
+            "treatment_condition",
+            "changed_factor_count",
+            "planned_trials",
+            "sampling_unit",
+            "randomization",
+            "independent_verification_required",
+            "primary_metric_ids",
+            "isolation_and_safety"
+          ],
+          "additionalProperties": false
+        },
+        "approval": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "not_required",
+                "pending",
+                "approved",
+                "rejected"
+              ]
+            },
+            "approver": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "approved_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "rationale": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "rollback_plan": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "status",
+            "rollback_plan"
+          ],
+          "additionalProperties": false
+        },
+        "safety_review": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "not_applicable_with_rationale"
+              ]
+            },
+            "reviewer": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "reviewed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "risk_controls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            }
+          },
+          "required": [
+            "status",
+            "rationale"
+          ],
+          "additionalProperties": false
+        },
+        "trial_refs": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          }
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "conclusion": {
+              "type": "string",
+              "enum": [
+                "supported",
+                "refuted",
+                "inconclusive",
+                "adverse_effect"
+              ]
+            },
+            "completed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "evidence_refs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+              }
+            },
+            "analysis_summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "side_effects": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "uncertainty_summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "conclusion",
+            "completed_at",
+            "evidence_refs",
+            "analysis_summary",
+            "uncertainty_summary"
+          ],
+          "additionalProperties": false
+        },
+        "closeout_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "record_type",
+        "purpose",
+        "lifecycle_state",
+        "target_assets",
+        "design",
+        "approval",
+        "safety_review",
+        "trial_refs"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "purpose": {
+            "const": "causal_confirmation"
+          }
+        },
+        "required": [
+          "purpose"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "design": {
+            "properties": {
+              "changed_factor_count": {
+                "const": 1
+              },
+              "planned_trials": {
+                "minimum": 2,
+                "type": "integer"
+              },
+              "independent_verification_required": {
+                "const": true
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "approved",
+              "ready",
+              "running",
+              "analyzing",
+              "completed",
+              "refuted",
+              "inconclusive"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "approval": {
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            },
+            "type": "object"
+          },
+          "safety_review": {
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "completed",
+              "refuted",
+              "inconclusive"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "trial_refs": {
+            "minItems": 1,
+            "type": "array"
+          },
+          "result": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "enum": [
+              "aborted",
+              "rolled_back"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "closeout_reason"
+        ],
+        "properties": {
+          "closeout_reason": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

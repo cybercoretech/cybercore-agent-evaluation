@@ -1,0 +1,35 @@
+# CyberCore Agent Evaluation Workbench
+
+**Status:** contract foundation, Python/TypeScript/Rust conformance, initial Rust domain core, in-memory evaluation/trial orchestration, and a Bubblewrap-backed Linux local process runner prototype implemented. Durable scheduling, persistence, artifact export, production-grade hostile-code isolation, API, CLI, MCP, and UI adapters remain unimplemented.
+
+The CyberCore Agent Evaluation Workbench is a provider-independent platform for designing, executing, verifying, analyzing, and improving AI-agent evaluations. Its signature capability is the Failure Attribution Engine: evidence-linked causal diagnosis, intervention validation, and cross-run reliability analysis.
+
+The Workbench is a companion to, not a dependency of, the [CyberCore Agent Skills](https://github.com/cybercoretech/cybercore-agent-skills) project. The skill supplies portable methodology and operating guidance. The Workbench supplies persistent records, controlled execution, evidence management, analysis, and reports. Both remain independently useful.
+
+## Initial product posture
+
+- Public open-source repository.
+- Private hosted alpha for CyberCore use; no public self-service signup initially.
+- Local-first CLI and evaluation workflow must not require Cloudflare credentials.
+- Cloudflare is the initial hosted control-plane target, behind provider interfaces.
+- Future workspace/tenant scoping is designed into records, but production multi-tenant isolation is not claimed or enabled by this design alone.
+- The Rust core provides shared domain-invariant validation, run-state projection, a provider-independent runner port, an in-memory evaluation/trial coordinator, and a Linux Bubblewrap local process runner prototype. The local runner is not a hardened VM: it has no aggregate cgroup memory/CPU/process-count quotas and does not export workspace files as artifacts. It must not be used for hostile public workloads. Do not pass secrets in task arguments or environment values because they are passed in the host-side Bubblewrap command line; captured stdout/stderr are also unredacted. No durable scheduler, persistence adapter, API endpoints, CLI commands, MCP tools, or hosted service are implemented yet.
+
+## Start here
+
+1. [System architecture](docs/architecture/system-architecture.md)
+2. [Domain model](docs/architecture/domain-model.md)
+3. [Execution and evidence](docs/architecture/execution-and-evidence.md)
+4. [Lifecycle state machines](docs/architecture/state-machines.md)
+5. [Security and tenancy](docs/security/threat-model.md)
+6. [Contract strategy](docs/contracts/README.md)
+7. [Rust evaluation core](docs/architecture/RUST-EVALUATION-CORE.md)
+8. [Evaluation orchestration](docs/architecture/EVALUATION-ORCHESTRATION.md)
+9. [Runner protocol](docs/architecture/RUNNER-PROTOCOL.md)
+10. [Local process runner](docs/architecture/LOCAL-PROCESS-RUNNER.md)
+11. [Architecture decision records](docs/decisions/)
+12. [Current platform notes and source links](docs/research/current-platform-notes.md)
+
+## Design rule
+
+Do not expose API, CLI, or MCP operations until the underlying application services, persistence, authorization behavior, and security boundaries are implemented and tested. Do not treat process exit status as task success; independent verification remains mandatory.

@@ -1,0 +1,39 @@
+{
+  "record_id": "METRIC-001",
+  "record_type": "metric_definition",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T12:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "cybercore-contract-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "benchmark-metrics-fixture"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "metric_id": "task-success-rate",
+  "revision": 1,
+  "lifecycle_state": "active",
+  "name": "Verified Task Success Rate",
+  "description": "Proportion of eligible planned trials whose independently verified final state satisfies all task acceptance criteria.",
+  "metric_kind": "binary_rate",
+  "unit": "proportion",
+  "value_direction": "higher_is_better",
+  "sampling_unit": "planned_trial",
+  "aggregation_level": "condition",
+  "estimator": "proportion",
+  "numerator_definition": "Count of eligible trials independently verified as pass.",
+  "denominator_definition": "Count of eligible trials with an observed verification disposition; excludes predeclared invalidations, not run retries.",
+  "eligibility_rule": "Use trial-level eligibility defined in the frozen evaluation plan.",
+  "missing_data_policy": "Keep missing verification separate from pass/fail; report it in missing_trial_count.",
+  "uncertainty_policy": {
+    "required_for_inference": true,
+    "method": "wilson",
+    "confidence_level": 0.95,
+    "resampling_unit": "trial",
+    "minimum_observations": 30
+  },
+  "multiple_comparison_family": "primary-success-metrics"
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "passport_denominators",
+  "summary": {
+    "planned_trials": 8,
+    "eligible_trials": 9,
+    "excluded_trials": 1,
+    "resolved_trials": 8,
+    "pass_trials": 7,
+    "fail_trials": 1,
+    "mixed_trials": 1,
+    "inconclusive_trials": 0,
+    "run_attempts": 9
+  }
+}

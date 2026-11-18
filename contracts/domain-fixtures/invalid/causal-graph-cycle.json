@@ -1,0 +1,29 @@
+{
+  "kind": "causal_graph",
+  "graph": {
+    "graph_id": "CYCLE",
+    "revision": 1,
+    "nodes": [
+      {
+        "node_id": "A",
+        "node_type": "event"
+      },
+      {
+        "node_id": "B",
+        "node_type": "error"
+      }
+    ],
+    "edges": [
+      {
+        "source_node": "A",
+        "target_node": "B",
+        "relationship": "caused"
+      },
+      {
+        "source_node": "B",
+        "target_node": "A",
+        "relationship": "contributed_to"
+      }
+    ]
+  }
+}

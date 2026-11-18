@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/attribution/causal-graph.schema.json",
+  "title": "Causal and Diagnostic Graph",
+  "description": "Directed evidence-linked graph. Edge endpoint existence, diagnostic direction, and causal acyclicity are domain invariants enforced by the domain validator and services.",
+  "type": "object",
+  "properties": {
+    "graph_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "node_type": {
+            "type": "string",
+            "enum": [
+              "event",
+              "condition",
+              "invariant",
+              "anomaly",
+              "error",
+              "failure",
+              "detection_gap",
+              "containment_gap",
+              "reporting_gap",
+              "asset",
+              "hypothesis"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+            }
+          },
+          "asset_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            }
+          },
+          "certainty": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "inferred",
+              "hypothesis"
+            ]
+          }
+        },
+        "required": [
+          "node_id",
+          "node_type",
+          "label",
+          "source_refs",
+          "certainty"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "edge_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "source_node": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "target_node": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "caused",
+              "contributed_to",
+              "enabled",
+              "amplified",
+              "propagated_to",
+              "prevented_recovery",
+              "escaped_detection",
+              "escaped_containment",
+              "misreported_as",
+              "manifested_as",
+              "correlated_with",
+              "preceded"
+            ]
+          },
+          "supporting_evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+            }
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        },
+        "required": [
+          "edge_id",
+          "source_node",
+          "target_node",
+          "relationship",
+          "supporting_evidence",
+          "rationale",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "graph_id",
+    "revision",
+    "nodes",
+    "edges"
+  ],
+  "additionalProperties": false
+}

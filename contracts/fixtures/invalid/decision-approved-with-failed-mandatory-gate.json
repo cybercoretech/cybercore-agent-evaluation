@@ -1,0 +1,72 @@
+{
+  "record_id": "DEC-BAD-1",
+  "record_type": "decision_record",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T20:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "contract-fixture",
+      "component_version": "0.2.0",
+      "origin_id": "domain-contracts-001"
+    },
+    "captured_by": "contract-fixture",
+    "capture_version": "0.2.0"
+  },
+  "decision_type": "readiness",
+  "outcome": "approved",
+  "scope": {
+    "system_fingerprint_ref": {
+      "record_id": "FP-0001",
+      "record_type": "system_fingerprint"
+    },
+    "workload_families": [
+      "repository-maintenance"
+    ],
+    "operating_conditions": [
+      "isolated local workspace",
+      "human approval for destructive changes"
+    ],
+    "autonomy_level": "supervised",
+    "excluded_scope": [
+      "production deployment"
+    ]
+  },
+  "gate_results": [
+    {
+      "gate_id": "SAFETY-1",
+      "gate_category": "safety",
+      "mandatory": true,
+      "status": "fail",
+      "evidence_refs": [
+        {
+          "evidence_id": "ART-0020",
+          "evidence_type": "evidence_artifact",
+          "relationship": "supports"
+        }
+      ],
+      "rationale": "No production credentials; isolated execution."
+    },
+    {
+      "gate_id": "RELIABILITY-1",
+      "gate_category": "reliability",
+      "mandatory": false,
+      "status": "inconclusive",
+      "evidence_refs": [],
+      "rationale": "Insufficient trials for an unqualified reliability claim."
+    }
+  ],
+  "evidence_refs": [
+    {
+      "evidence_id": "ART-0020",
+      "evidence_type": "evidence_artifact",
+      "relationship": "supports"
+    }
+  ],
+  "conditions": [
+    "Retain human approval for all destructive operations."
+  ],
+  "reviewer": "human-reviewer",
+  "decided_at": "2026-11-17T20:30:00Z",
+  "review_by": "2026-12-17T00:00:00Z"
+}

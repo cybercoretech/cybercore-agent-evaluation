@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/benchmark/benchmark-revision.schema.json",
+  "title": "Benchmark Revision",
+  "description": "Versioned benchmark collection with an explicit task population, sampling frame, grader/ground-truth provenance, and audit disposition.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "benchmark_revision"
+        },
+        "benchmark_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "frozen",
+            "retired"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "intended_workloads": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "task_revision_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          },
+          "minItems": 1
+        },
+        "task_population_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "sampling_frame": {
+          "type": "object",
+          "properties": {
+            "population_description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "selection_method": {
+              "type": "string",
+              "enum": [
+                "census",
+                "random",
+                "stratified_random",
+                "curated",
+                "adversarial",
+                "synthetic",
+                "other"
+              ]
+            },
+            "selection_rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "strata": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "levels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "levels"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "target_trial_count": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "population_description",
+            "selection_method",
+            "selection_rationale",
+            "target_trial_count"
+          ],
+          "additionalProperties": false
+        },
+        "grader_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          },
+          "minItems": 1
+        },
+        "ground_truth_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          },
+          "minItems": 1
+        },
+        "audit": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "not_started",
+                "in_progress",
+                "passed",
+                "passed_with_limitations",
+                "failed"
+              ]
+            },
+            "audited_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "auditor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "info",
+                      "low",
+                      "medium",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "category": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "resolution": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "severity",
+                  "category",
+                  "description"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "contamination_assessment": {
+              "type": "string",
+              "enum": [
+                "not_assessed",
+                "no_known_contamination",
+                "possible_contamination",
+                "confirmed_contamination"
+              ]
+            },
+            "contamination_mitigation": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "status",
+            "contamination_assessment"
+          ],
+          "additionalProperties": false
+        },
+        "frozen_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "supersedes_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        }
+      },
+      "required": [
+        "record_type",
+        "benchmark_key",
+        "revision",
+        "lifecycle_state",
+        "name",
+        "purpose",
+        "intended_workloads",
+        "task_revision_refs",
+        "task_population_digest",
+        "sampling_frame",
+        "grader_refs",
+        "ground_truth_refs",
+        "audit"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "frozen"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "frozen_at",
+          "content_digest"
+        ],
+        "properties": {
+          "frozen_at": {},
+          "content_digest": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle_state": {
+            "const": "frozen"
+          }
+        },
+        "required": [
+          "lifecycle_state"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "audit": {
+            "required": [
+              "evidence_refs"
+            ],
+            "type": "object",
+            "properties": {
+              "evidence_refs": {}
+            }
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

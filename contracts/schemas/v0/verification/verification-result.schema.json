@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/verification/verification-result.schema.json",
+  "title": "Verification Result",
+  "description": "Criterion-specific independent verification record. Agent claims alone are not verification.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "verification_result"
+        },
+        "run_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "criterion_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "verifier": {
+          "type": "object",
+          "properties": {
+            "verifier_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "verifier_type": {
+              "type": "string",
+              "enum": [
+                "deterministic",
+                "model_judge",
+                "human",
+                "external_service",
+                "hybrid"
+              ]
+            }
+          },
+          "required": [
+            "verifier_id",
+            "version",
+            "verifier_type"
+          ],
+          "additionalProperties": false
+        },
+        "inspected_target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "mixed",
+            "inconclusive",
+            "unavailable"
+          ]
+        },
+        "performed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "judge_rationale": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "record_type",
+        "run_ref",
+        "criterion_id",
+        "verifier",
+        "inspected_target",
+        "method",
+        "result",
+        "performed_at",
+        "evidence_refs"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "enum": [
+              "pass",
+              "fail",
+              "mixed"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "evidence_refs": {
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "enum": [
+              "inconclusive",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "limitations": {
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

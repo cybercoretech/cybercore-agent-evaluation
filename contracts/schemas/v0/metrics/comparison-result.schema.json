@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/metrics/comparison-result.schema.json",
+  "title": "Metric Comparison Result",
+  "description": "Comparison between two conditions with explicit comparability dimensions, design, sample sizes, effect direction, uncertainty, and multiplicity context.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "comparison_result"
+        },
+        "metric_definition_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "metric_definition_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "baseline_metric_result_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "treatment_metric_result_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "baseline_condition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "treatment_condition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "comparison_status": {
+          "type": "string",
+          "enum": [
+            "comparable",
+            "conditionally_comparable",
+            "not_comparable",
+            "insufficient_evidence"
+          ]
+        },
+        "comparison_design": {
+          "type": "string",
+          "enum": [
+            "randomized_paired",
+            "blocked_paired",
+            "randomized_unpaired",
+            "observational_unpaired",
+            "crossover"
+          ]
+        },
+        "comparability": {
+          "type": "object",
+          "properties": {
+            "benchmark_content_digest": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "task_population_digest": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "metric_definition_digest": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "eligibility_policy_digest": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "aggregation_level": {
+              "type": "string",
+              "enum": [
+                "condition",
+                "benchmark",
+                "task_family",
+                "stratum"
+              ]
+            },
+            "mismatch_dimensions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "uniqueItems": true
+            },
+            "limitations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          },
+          "required": [
+            "benchmark_content_digest",
+            "task_population_digest",
+            "metric_definition_digest",
+            "eligibility_policy_digest",
+            "aggregation_level",
+            "mismatch_dimensions",
+            "limitations"
+          ],
+          "additionalProperties": false
+        },
+        "sample_sizes": {
+          "type": "object",
+          "properties": {
+            "baseline_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "treatment_trial_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matched_pair_count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "baseline_trial_count",
+            "treatment_trial_count",
+            "matched_pair_count"
+          ],
+          "additionalProperties": false
+        },
+        "inferential_status": {
+          "type": "string",
+          "enum": [
+            "confirmatory",
+            "exploratory",
+            "descriptive_only",
+            "prohibited"
+          ]
+        },
+        "effect": {
+          "type": "object",
+          "properties": {
+            "estimate": {
+              "type": "number"
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "direction_interpretation": {
+              "type": "string",
+              "enum": [
+                "favors_baseline",
+                "favors_treatment",
+                "no_material_direction",
+                "undetermined"
+              ]
+            },
+            "interval": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "confidence_level": {
+                  "type": "number",
+                  "exclusiveMinimum": 0.5,
+                  "exclusiveMaximum": 1
+                },
+                "lower_bound": {
+                  "type": "number"
+                },
+                "upper_bound": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "method",
+                "confidence_level",
+                "lower_bound",
+                "upper_bound"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "estimate",
+            "unit",
+            "direction_interpretation"
+          ],
+          "additionalProperties": false
+        },
+        "inference": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "p_value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "multiplicity_method": {
+              "type": "string",
+              "enum": [
+                "none_predeclared_single_test",
+                "holm",
+                "benjamini_hochberg",
+                "bonferroni",
+                "other"
+              ]
+            },
+            "comparison_family_size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "practical_significance_threshold": {
+              "type": "number",
+              "minimum": 0
+            },
+            "practical_significance": {
+              "type": "string",
+              "enum": [
+                "meaningful",
+                "not_meaningful",
+                "uncertain",
+                "not_assessed"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "multiplicity_method",
+            "comparison_family_size",
+            "practical_significance"
+          ],
+          "additionalProperties": false
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "record_type",
+        "metric_definition_ref",
+        "metric_definition_digest",
+        "baseline_metric_result_ref",
+        "treatment_metric_result_ref",
+        "baseline_condition_id",
+        "treatment_condition_id",
+        "comparison_status",
+        "comparison_design",
+        "comparability",
+        "sample_sizes",
+        "inferential_status",
+        "limitations",
+        "computed_at"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "comparison_status": {
+            "enum": [
+              "comparable",
+              "conditionally_comparable"
+            ]
+          }
+        },
+        "required": [
+          "comparison_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "effect",
+          "inference"
+        ],
+        "properties": {
+          "effect": {},
+          "inference": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "comparison_status": {
+            "const": "not_comparable"
+          }
+        },
+        "required": [
+          "comparison_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "inferential_status": {
+            "enum": [
+              "descriptive_only",
+              "prohibited"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

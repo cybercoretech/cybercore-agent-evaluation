@@ -1,0 +1,20 @@
+{
+  "kind": "attribution_confirmation",
+  "status": "confirmed",
+  "confirmation": {
+    "basis": "controlled_replicated_intervention",
+    "intervention_ref": {
+      "record_id": "INT-ONE",
+      "record_type": "intervention"
+    },
+    "replicated_trial_count": 1,
+    "control_treatment_summary": "Single uncontrolled replay.",
+    "evidence_refs": [
+      {
+        "evidence_id": "ART-ONE",
+        "evidence_type": "evidence_artifact",
+        "relationship": "supports"
+      }
+    ]
+  }
+}

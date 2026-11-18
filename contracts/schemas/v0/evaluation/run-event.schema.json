@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evaluation/run-event.schema.json",
+  "title": "Run Event",
+  "description": "Observable execution event. Hidden chain-of-thought is not a required or expected event payload.",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "run_event"
+        },
+        "run_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "event_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "actor_type": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "tool",
+                "runner",
+                "human",
+                "system",
+                "external_service"
+              ]
+            },
+            "actor_id": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "actor_type"
+          ],
+          "additionalProperties": false
+        },
+        "component": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "correlation_id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "parent_event_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "input_evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+          }
+        },
+        "output_evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+          }
+        },
+        "payload_artifact_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "redaction": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "not_assessed",
+                "not_required",
+                "redacted",
+                "pending"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "redaction_policy_version": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "record_type",
+        "run_ref",
+        "sequence",
+        "occurred_at",
+        "event_type",
+        "actor",
+        "redaction"
+      ]
+    }
+  ],
+  "unevaluatedProperties": false,
+  "type": "object"
+}

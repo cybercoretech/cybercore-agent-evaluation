@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/provenance.schema.json",
+  "title": "Record Provenance",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "object",
+      "properties": {
+        "system": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "component": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "component_version": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "origin_id": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "system"
+      ],
+      "additionalProperties": false
+    },
+    "parent_records": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+      }
+    },
+    "captured_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "capture_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "integrity": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "const": "sha-256"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "source",
+    "captured_by",
+    "capture_version"
+  ],
+  "additionalProperties": false
+}

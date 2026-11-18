@@ -1,0 +1,39 @@
+{
+  "record_id": "TRIAL-0001",
+  "record_type": "trial",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "evaluation_ref": {
+    "record_id": "EVAL-0001",
+    "record_type": "evaluation"
+  },
+  "plan_ref": {
+    "record_id": "PLAN-0001",
+    "record_type": "evaluation_plan"
+  },
+  "sampling_unit_key": "task:repo-small-change|condition:BASE|replicate:1",
+  "task_revision_ref": {
+    "record_id": "TASK-0001",
+    "record_type": "task_revision"
+  },
+  "condition_id": "BASE",
+  "replicate_index": 1,
+  "stratum": {
+    "task_family": "repository_maintenance",
+    "risk": "low"
+  },
+  "assigned_order": 1,
+  "lifecycle_state": "assigned",
+  "analysis_eligibility": "pending",
+  "run_attempt_refs": []
+}

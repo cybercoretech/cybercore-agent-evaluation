@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json",
+  "title": "Evidence Reference",
+  "description": "Typed pointer to evidence; resolution, access control, and digest verification are application responsibilities.",
+  "type": "object",
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "evidence_type": {
+      "type": "string",
+      "enum": [
+        "evidence_artifact",
+        "run_event",
+        "verification_result",
+        "external_evidence"
+      ]
+    },
+    "relationship": {
+      "type": "string",
+      "enum": [
+        "supports",
+        "contradicts",
+        "context",
+        "source",
+        "reproduces"
+      ]
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "evidence_type",
+    "relationship"
+  ],
+  "additionalProperties": false
+}

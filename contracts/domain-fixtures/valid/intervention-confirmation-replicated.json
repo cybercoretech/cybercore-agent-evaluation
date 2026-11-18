@@ -1,0 +1,11 @@
+{
+  "kind": "intervention_design",
+  "purpose": "causal_confirmation",
+  "design": {
+    "changed_factor_count": 1,
+    "planned_trials": 3,
+    "independent_verification_required": true,
+    "control_condition": "baseline",
+    "treatment_condition": "one-factor change"
+  }
+}

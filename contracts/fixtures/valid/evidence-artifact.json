@@ -1,0 +1,39 @@
+{
+  "record_id": "ART-RESULT-1",
+  "record_type": "evidence_artifact",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "project_ref": {
+    "record_id": "PROJECT-1",
+    "record_type": "project"
+  },
+  "source_record_ref": {
+    "record_id": "RUN-0001",
+    "record_type": "run"
+  },
+  "artifact_kind": "agent_output",
+  "lifecycle_state": "available",
+  "content_type": "text/plain",
+  "byte_length": 42,
+  "sha256_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "object_ref": "opaque/tenant/project/artifact-id",
+  "captured_at": "2026-11-17T19:14:00Z",
+  "verified_at": "2026-11-17T19:14:01Z",
+  "redaction_state": "not_required",
+  "access_classification": "project_internal",
+  "retention": {
+    "policy_id": "project-default-90d",
+    "legal_hold": false
+  },
+  "description": "Captured output text from the run."
+}

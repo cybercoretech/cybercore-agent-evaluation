@@ -1,0 +1,40 @@
+{
+  "record_id": "VERIFY-0001",
+  "record_type": "verification_result",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "run_ref": {
+    "record_id": "RUN-0001",
+    "record_type": "run"
+  },
+  "criterion_id": "CRIT-1",
+  "verifier": {
+    "verifier_id": "filesystem-check",
+    "version": "0.1.0",
+    "verifier_type": "deterministic"
+  },
+  "inspected_target": "workspace:/repo/README.md",
+  "method": "Read the file and compare the target version string.",
+  "result": "pass",
+  "performed_at": "2026-11-17T19:15:00Z",
+  "evidence_refs": [
+    {
+      "evidence_id": "ART-RESULT-1",
+      "evidence_type": "evidence_artifact",
+      "relationship": "supports"
+    }
+  ],
+  "limitations": [
+    "Only the designated file was inspected."
+  ]
+}

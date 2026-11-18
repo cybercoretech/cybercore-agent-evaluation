@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/evaluation/run.schema.json",
+  "title": "Execution Run",
+  "description": "One actual execution attempt. Execution status, assessed outcome, and verification state are independent.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "run"
+        },
+        "evaluation_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "trial_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "task_revision_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "system_fingerprint_ref": {
+          "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+        },
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt_kind": {
+          "type": "string",
+          "enum": [
+            "initial",
+            "infrastructure_retry",
+            "authorized_replay"
+          ]
+        },
+        "attempt_reason": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "runner": {
+          "type": "object",
+          "properties": {
+            "runner_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "runner_type": {
+              "type": "string",
+              "enum": [
+                "local",
+                "cloud",
+                "self_hosted",
+                "external"
+              ]
+            },
+            "runner_version": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "environment_ref": {
+              "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+            }
+          },
+          "required": [
+            "runner_id",
+            "runner_type"
+          ],
+          "additionalProperties": false
+        },
+        "execution_status": {
+          "type": "string",
+          "enum": [
+            "created",
+            "queued",
+            "starting",
+            "running",
+            "finalizing",
+            "finished",
+            "errored",
+            "timed_out",
+            "cancelled"
+          ]
+        },
+        "run_outcome": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "pass",
+            "fail",
+            "inconclusive",
+            "not_scored",
+            "invalid"
+          ]
+        },
+        "verification_state": {
+          "type": "string",
+          "enum": [
+            "not_started",
+            "in_progress",
+            "verified_pass",
+            "verified_fail",
+            "mixed",
+            "inconclusive",
+            "unavailable"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "agent_report": {
+          "type": "object",
+          "properties": {
+            "completion_claim": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "partially_completed",
+                "unable_to_complete",
+                "no_claim"
+              ]
+            },
+            "reported_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "output_evidence_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+              }
+            }
+          },
+          "required": [
+            "completion_claim"
+          ],
+          "additionalProperties": false
+        },
+        "event_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/evidence-reference.schema.json"
+          }
+        },
+        "verification_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-reference.schema.json"
+          }
+        },
+        "resource_usage": {
+          "type": "object",
+          "properties": {
+            "wall_time_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tool_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cost_microunits": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "error_summary": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "record_type",
+        "evaluation_ref",
+        "trial_ref",
+        "task_revision_ref",
+        "system_fingerprint_ref",
+        "attempt_number",
+        "attempt_kind",
+        "runner",
+        "execution_status",
+        "run_outcome",
+        "verification_state"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "execution_status": {
+            "const": "finished"
+          }
+        },
+        "required": [
+          "execution_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "started_at",
+          "ended_at"
+        ],
+        "properties": {
+          "started_at": {},
+          "ended_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "execution_status": {
+            "enum": [
+              "finalizing",
+              "running"
+            ]
+          }
+        },
+        "required": [
+          "execution_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "started_at"
+        ],
+        "properties": {
+          "started_at": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "execution_status": {
+            "enum": [
+              "errored",
+              "timed_out",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "execution_status"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "ended_at"
+        ],
+        "properties": {
+          "ended_at": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

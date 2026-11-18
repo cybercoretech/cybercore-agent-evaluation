@@ -1,0 +1,24 @@
+{
+  "kind": "causal_graph",
+  "graph": {
+    "graph_id": "REVERSED",
+    "revision": 1,
+    "nodes": [
+      {
+        "node_id": "G",
+        "node_type": "detection_gap"
+      },
+      {
+        "node_id": "F",
+        "node_type": "failure"
+      }
+    ],
+    "edges": [
+      {
+        "source_node": "G",
+        "target_node": "F",
+        "relationship": "escaped_detection"
+      }
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "record_id": "FAIL-BAD-1",
+  "record_type": "failure",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T20:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "contract-fixture",
+      "component_version": "0.2.0",
+      "origin_id": "domain-contracts-001"
+    },
+    "captured_by": "contract-fixture",
+    "capture_version": "0.2.0"
+  },
+  "run_ref": {
+    "record_id": "RUN-0001",
+    "record_type": "run"
+  },
+  "failure_class": "requirement_violation",
+  "observed_at": "2026-11-17T20:10:00Z",
+  "summary": "A write was directed to the wrong workspace.",
+  "violated_requirement": "Writes must target the requested repository root.",
+  "decisive_event_refs": [
+    {
+      "record_id": "EVENT-0008",
+      "record_type": "run_event"
+    }
+  ],
+  "evidence_refs": [],
+  "verification_state": "verified",
+  "verification_result_ref": {
+    "record_id": "VERIFY-0008",
+    "record_type": "verification_result"
+  },
+  "gap_node_refs": {
+    "detection": [
+      "GAP-DET-1"
+    ],
+    "containment": [],
+    "reporting": [
+      "GAP-REP-1"
+    ]
+  },
+  "recovery_summary": "The erroneous write was reverted.",
+  "final_state_summary": "No unintended change remained."
+}

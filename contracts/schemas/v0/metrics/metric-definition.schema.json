@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/metrics/metric-definition.schema.json",
+  "title": "Metric Definition",
+  "description": "Versioned, predeclared metric semantics. Defines the sample unit, estimator, denominator, direction, eligibility, and uncertainty policy.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/cybercoretech/cybercore-agent-evaluation/main/contracts/schemas/v0/common/record-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "metric_definition"
+        },
+        "metric_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lifecycle_state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "active",
+            "retired"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "metric_kind": {
+          "type": "string",
+          "enum": [
+            "binary_rate",
+            "count",
+            "mean",
+            "median",
+            "quantile",
+            "sum",
+            "ratio",
+            "latency",
+            "cost",
+            "distribution_summary"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "value_direction": {
+          "type": "string",
+          "enum": [
+            "higher_is_better",
+            "lower_is_better",
+            "target_range",
+            "non_compensatory",
+            "no_directional_preference"
+          ]
+        },
+        "target_range": {
+          "type": "object",
+          "properties": {
+            "minimum": {
+              "type": "number"
+            },
+            "maximum": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "minimum",
+            "maximum"
+          ],
+          "additionalProperties": false
+        },
+        "sampling_unit": {
+          "const": "planned_trial"
+        },
+        "aggregation_level": {
+          "type": "string",
+          "enum": [
+            "condition",
+            "benchmark",
+            "task_family",
+            "stratum"
+          ]
+        },
+        "estimator": {
+          "type": "string",
+          "enum": [
+            "proportion",
+            "count",
+            "arithmetic_mean",
+            "median",
+            "quantile",
+            "sum",
+            "ratio_of_sums",
+            "p50",
+            "p90",
+            "p95",
+            "p99"
+          ]
+        },
+        "quantile": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "numerator_definition": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "denominator_definition": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "eligibility_rule": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "missing_data_policy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "uncertainty_policy": {
+          "type": "object",
+          "properties": {
+            "required_for_inference": {
+              "type": "boolean"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "wilson",
+                "exact_binomial",
+                "bootstrap_percentile",
+                "bootstrap_bca",
+                "student_t",
+                "paired_bootstrap",
+                "cluster_bootstrap",
+                "none_descriptive"
+              ]
+            },
+            "confidence_level": {
+              "type": "number",
+              "exclusiveMinimum": 0.5,
+              "exclusiveMaximum": 1
+            },
+            "resampling_unit": {
+              "type": "string",
+              "enum": [
+                "trial",
+                "task_cluster",
+                "matched_pair",
+                "not_applicable"
+              ]
+            },
+            "minimum_observations": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "required_for_inference",
+            "method",
+            "minimum_observations"
+          ],
+          "additionalProperties": false
+        },
+        "multiple_comparison_family": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "practical_significance_threshold": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "record_type",
+        "metric_id",
+        "revision",
+        "lifecycle_state",
+        "name",
+        "description",
+        "metric_kind",
+        "unit",
+        "value_direction",
+        "sampling_unit",
+        "aggregation_level",
+        "estimator",
+        "eligibility_rule",
+        "missing_data_policy",
+        "uncertainty_policy"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "metric_kind": {
+            "const": "binary_rate"
+          }
+        },
+        "required": [
+          "metric_kind"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "numerator_definition",
+          "denominator_definition"
+        ],
+        "properties": {
+          "estimator": {
+            "const": "proportion"
+          },
+          "numerator_definition": {},
+          "denominator_definition": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "value_direction": {
+            "const": "target_range"
+          }
+        },
+        "required": [
+          "value_direction"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "target_range"
+        ],
+        "properties": {
+          "target_range": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "estimator": {
+            "const": "quantile"
+          }
+        },
+        "required": [
+          "estimator"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "quantile"
+        ],
+        "properties": {
+          "quantile": {}
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

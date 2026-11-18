@@ -51,6 +51,8 @@ The `RunState` projection remains responsible for each run's execution lifecycle
 
 Hosted use requires a durable application service that atomically reserves trial/run identities, enforces global concurrency and idempotency, persists state before dispatch, reconciles ambiguous runner outcomes, and resumes safely after worker restarts.
 
+Locally, `DurableScheduler` in `crates/evaluation-store` provides this: a lease-fenced, write-ahead journal of coordinator commands that is replayed after a restart, with globally unique attempt identities and interrupted attempts closed as retryable runner errors under the schedule's own retry policy. See [ADR-0010](../decisions/0010-durable-scheduling.md).
+
 ## Tests
 
 Unit tests cover schedule validation, duplicate trial IDs, local concurrency, run identity uniqueness, retries by failure code, retryable runner errors, timeout policy, terminal cancellation, request/result correlation, and the rule that completed execution awaits separate assessment.

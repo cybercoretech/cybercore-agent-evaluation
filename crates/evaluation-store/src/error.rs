@@ -18,6 +18,12 @@ pub enum StoreError {
     Integrity(String),
     /// The embedded contract schemas could not be compiled.
     Contract(String),
+    /// Another scheduler holds an unexpired lease on this evaluation.
+    LeaseHeld(String),
+    /// This scheduler's lease expired or was taken over; it must stop writing.
+    LeaseLost(String),
+    /// The trial coordinator rejected the command (nothing was persisted).
+    Orchestration(cybercore_evaluation_core::OrchestrationError),
     Database(rusqlite::Error),
     Io(std::io::Error),
 }
@@ -31,6 +37,9 @@ impl fmt::Display for StoreError {
             Self::NotFound(message) => write!(f, "not found: {message}"),
             Self::Integrity(message) => write!(f, "integrity failure: {message}"),
             Self::Contract(message) => write!(f, "contract schemas: {message}"),
+            Self::LeaseHeld(message) => write!(f, "scheduler lease held: {message}"),
+            Self::LeaseLost(message) => write!(f, "scheduler lease lost: {message}"),
+            Self::Orchestration(error) => write!(f, "orchestration: {error}"),
             Self::Database(error) => write!(f, "database: {error}"),
             Self::Io(error) => write!(f, "io: {error}"),
         }
@@ -42,6 +51,7 @@ impl std::error::Error for StoreError {
         match self {
             Self::Database(error) => Some(error),
             Self::Io(error) => Some(error),
+            Self::Orchestration(error) => Some(error),
             _ => None,
         }
     }

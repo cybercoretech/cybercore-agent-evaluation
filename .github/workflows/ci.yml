@@ -38,3 +38,35 @@ jobs:
         run: cargo test --workspace --locked
       - name: Python, TypeScript and Rust contract conformance + core tests
         run: bash scripts/validate_all_contracts.sh
+  sandbox:
+    name: Bubblewrap sandbox (real execution)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Allow unprivileged user namespaces on this throwaway runner
+        # Ubuntu 24.04 restricts them through AppArmor by default; Bubblewrap needs them.
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 /usr/bin/true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Local process runner smoke test
+        run: cargo run --locked -p cybercore-evaluation-core --example local_process_runner_smoke
+      - name: Durable evaluation demo (crash, then resume)
+        run: |
+          set -o pipefail
+          dir="$RUNNER_TEMP/durable-demo"
+          if cargo run --locked -q -p cybercore-evaluation-store --example durable_evaluation -- "$dir" --crash-after 2; then
+            echo "expected the simulated crash to exit non-zero" >&2; exit 1
+          fi
+          cargo run --locked -q -p cybercore-evaluation-store --example durable_evaluation -- "$dir" | tee "$RUNNER_TEMP/resume.txt"
+          grep -q 'interrupted attempts: \["REQ-TRIAL-3-A1"\]' "$RUNNER_TEMP/resume.txt"
+          grep -q 'RUN-TRIAL-4-A1 .*verified_fail' "$RUNNER_TEMP/resume.txt"
+      - name: workbench CLI against the real sandbox (skips are failures here)
+        env:
+          WORKBENCH_REQUIRE_BWRAP: "1"
+        run: cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture run_executes_records_and_resumes_idempotently

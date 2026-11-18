@@ -245,6 +245,13 @@ fn run_executes_records_and_resumes_idempotently() {
 
     let first = workbench(&["run", file, "--store", store_arg], &[]);
     if !first.status.success() && stderr(&first).contains("runner:") {
+        // CI sets WORKBENCH_REQUIRE_BWRAP=1 on a job that installs Bubblewrap,
+        // so an unusable sandbox fails there instead of passing as a skip.
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&first).trim()
+        );
         eprintln!(
             "SKIPPED: Bubblewrap is unavailable here: {}",
             stderr(&first).trim()

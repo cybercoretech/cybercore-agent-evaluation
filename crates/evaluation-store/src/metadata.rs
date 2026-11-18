@@ -9,7 +9,10 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_initial.sql"),
+    include_str!("../migrations/0002_durable_scheduling.sql"),
+];
 const MAX_LIST_LIMIT: u32 = 1000;
 
 /// Result of an append-only write.
@@ -110,7 +113,7 @@ impl SqliteMetadataStore {
         })
     }
 
-    fn lock(&self) -> StoreResult<MutexGuard<'_, Connection>> {
+    pub(crate) fn lock(&self) -> StoreResult<MutexGuard<'_, Connection>> {
         self.connection
             .lock()
             .map_err(|_| StoreError::Integrity("metadata store mutex was poisoned".into()))

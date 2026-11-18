@@ -178,7 +178,8 @@ pub struct RunnerResult {
     pub failure: Option<RunnerFailure>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunnerErrorKind {
     InvalidRequest,
     UnsupportedPolicy,
@@ -187,7 +188,8 @@ pub enum RunnerErrorKind {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunnerError {
     pub kind: RunnerErrorKind,
     pub retryable: bool,

@@ -8,12 +8,14 @@ use crate::runner::{
     validate_result, ExecutionBudget, ExecutionDisposition, ExecutionRequest, NetworkPolicy,
     RecordReference, RunnerError, RunnerErrorKind, RunnerResult, SideEffectPolicy,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
     /// Total execution attempts per trial, including the initial attempt.
     pub max_attempts_per_trial: u32,
@@ -37,7 +39,8 @@ impl Default for RetryPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrialDefinition {
     pub trial_ref: RecordReference,
     pub task_revision_ref: RecordReference,
@@ -50,7 +53,8 @@ pub struct TrialDefinition {
     pub capability_grant_refs: Vec<RecordReference>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvaluationSchedule {
     pub evaluation_ref: RecordReference,
     pub plan_ref: RecordReference,
@@ -98,7 +102,8 @@ pub enum AttemptAction {
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AttemptIdentity {
     pub run_ref: RecordReference,
     pub request_id: String,

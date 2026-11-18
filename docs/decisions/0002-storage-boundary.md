@@ -1,6 +1,6 @@
 # ADR-0002: Relational Metadata and Separate Evidence Object Storage
 
-- **Status:** Accepted direction; write protocol requires prototype
+- **Status:** Accepted direction; local write protocol implemented in ADR-0009 (`crates/evaluation-store`); hosted D1/R2 adapters pending
 - **Date:** 2026-11-16
 
 ## Context

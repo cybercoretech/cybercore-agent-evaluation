@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const LONG: Duration = Duration::from_secs(300);
-const SHORT: Duration = Duration::from_millis(40);
 
 fn reference(record_type: &str, record_id: &str) -> RecordReference {
     RecordReference {
@@ -104,6 +103,21 @@ impl Drop for TempDb {
     }
 }
 
+/// Expires an evaluation's lease by moving `expires_at` into the past. The
+/// tests do this instead of sleeping past a short TTL, so they do not depend on
+/// how fast the machine opens and fsyncs the database.
+fn expire_lease(path: &PathBuf, evaluation_id: &str) {
+    let changed = Connection::open(path)
+        .unwrap()
+        .execute(
+            "UPDATE scheduler_leases SET expires_at = '2000-01-01T00:00:00.000Z'
+             WHERE evaluation_id = ?1",
+            [evaluation_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "no lease to expire for {evaluation_id}");
+}
+
 fn journal_len(path: &PathBuf) -> i64 {
     Connection::open(path)
         .unwrap()
@@ -185,11 +199,11 @@ fn in_flight_attempts_are_closed_and_retried_by_policy_after_a_crash() {
         .unwrap();
     {
         let (mut scheduler, _) =
-            DurableScheduler::acquire(&store, "EVAL-1", "worker-a", SHORT).unwrap();
+            DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
         scheduler.reserve_attempt("TRIAL-1", identity("1")).unwrap();
         // Crash: the scheduler disappears without completing or releasing.
     }
-    std::thread::sleep(SHORT * 2);
+    expire_lease(&db.path(), "EVAL-1");
 
     let (mut scheduler, report) =
         DurableScheduler::acquire(&store, "EVAL-1", "worker-b", LONG).unwrap();
@@ -263,8 +277,8 @@ fn a_fenced_out_scheduler_cannot_write_and_its_memory_is_rolled_back() {
     store
         .create_schedule(&schedule("EVAL-1", RetryPolicy::default()))
         .unwrap();
-    let (mut stale, _) = DurableScheduler::acquire(&store, "EVAL-1", "worker-a", SHORT).unwrap();
-    std::thread::sleep(SHORT * 2);
+    let (mut stale, _) = DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    expire_lease(&db.path(), "EVAL-1");
     let (fresh, _) = DurableScheduler::acquire(&store, "EVAL-1", "worker-b", LONG).unwrap();
     assert!(fresh.fencing_token() > stale.fencing_token());
 
@@ -284,18 +298,28 @@ fn a_fenced_out_scheduler_cannot_write_and_its_memory_is_rolled_back() {
 
 #[test]
 fn an_expired_lease_stops_writes_until_reacquired() {
-    let store = SqliteMetadataStore::open_in_memory().unwrap();
+    let db = TempDb::new("expiry");
+    let store = SqliteMetadataStore::open(db.path()).unwrap();
     store
         .create_schedule(&schedule("EVAL-1", RetryPolicy::default()))
         .unwrap();
-    let (mut scheduler, _) =
-        DurableScheduler::acquire(&store, "EVAL-1", "worker-a", SHORT).unwrap();
+    let (mut scheduler, _) = DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
     scheduler.renew_lease().unwrap();
-    std::thread::sleep(SHORT * 2);
+    expire_lease(&db.path(), "EVAL-1");
     assert!(matches!(
         scheduler.reserve_attempt("TRIAL-1", identity("1")),
         Err(StoreError::LeaseLost(_))
     ));
+    assert!(matches!(
+        scheduler.renew_lease(),
+        Err(StoreError::LeaseLost(_))
+    ));
+    assert_eq!(journal_len(&db.path()), 0);
+
+    // Reacquiring (same owner) restores the ability to write.
+    let (mut scheduler, _) = DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    scheduler.reserve_attempt("TRIAL-1", identity("1")).unwrap();
+    assert_eq!(journal_len(&db.path()), 1);
 }
 
 #[test]

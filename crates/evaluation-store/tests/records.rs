@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -28,6 +29,8 @@ struct ScriptedRunner {
     descriptor: RunnerDescriptor,
     capabilities: RunnerCapabilities,
     script: Mutex<BTreeMap<String, VecDeque<Script>>>,
+    live: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl ScriptedRunner {
@@ -54,6 +57,8 @@ impl ScriptedRunner {
                     .map(|(trial, steps)| (trial.to_string(), steps.iter().cloned().collect()))
                     .collect(),
             ),
+            live: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
         }
     }
 }
@@ -77,6 +82,14 @@ impl Runner for ScriptedRunner {
             .expect("no scripted step left for trial");
         let request_id = request.request_id.clone();
         Box::pin(async move {
+            // Stay in flight across a few polls so overlapping attempts are
+            // observable, and record the most that ran at once.
+            let now = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            for _ in 0..3 {
+                tokio::task::yield_now().await;
+            }
+            self.live.fetch_sub(1, Ordering::SeqCst);
             match step {
                 Script::Unavailable => Err(RunnerError {
                     kind: RunnerErrorKind::Unavailable,
@@ -474,4 +487,163 @@ async fn interrupted_attempts_are_recorded_as_errored_and_retried() {
         .unwrap()
         .contains(INTERRUPTED_ATTEMPT_MESSAGE));
     assert_eq!(record(&store, "RUN-T-PASS-A2")["run_outcome"], "pass");
+}
+
+fn schedule_with(trials: &[&str], max_active_runs: usize) -> EvaluationSchedule {
+    EvaluationSchedule {
+        max_active_runs,
+        ..schedule(trials)
+    }
+}
+
+async fn run(
+    store: &LocalStore,
+    runner: &ScriptedRunner,
+) -> cybercore_evaluation_store::DriveReport {
+    let (mut scheduler, _) =
+        DurableScheduler::acquire(store.metadata(), "EVAL-1", "w", LONG).unwrap();
+    run_ready_trials(
+        store,
+        &mut scheduler,
+        runner,
+        &config(runner, false),
+        &verifier(),
+        identity,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn attempts_run_concurrently_up_to_max_active_runs() {
+    for (limit, expected_peak) in [(1, 1), (2, 2), (8, 4)] {
+        let dir = TempDir::new(&format!("concurrency-{limit}"));
+        let store = LocalStore::open(&dir.0).unwrap();
+        store
+            .metadata()
+            .create_schedule(&schedule_with(
+                &["T-PASS", "T-FAIL", "T-RETRY", "T-UNKNOWN"],
+                limit,
+            ))
+            .unwrap();
+        let runner = ScriptedRunner::new(&[
+            ("T-PASS", &[Script::Stdout("hello\n")]),
+            ("T-FAIL", &[Script::Stdout("goodbye\n")]),
+            ("T-RETRY", &[Script::Unavailable, Script::Stdout("hello\n")]),
+            ("T-UNKNOWN", &[Script::Stdout("x\n")]),
+        ]);
+        let report = run(&store, &runner).await;
+        assert_eq!(report.executed.len(), 5, "limit {limit}");
+        assert_eq!(report.peak_concurrency, expected_peak, "limit {limit}");
+        assert_eq!(
+            runner.peak.load(Ordering::SeqCst),
+            expected_peak,
+            "limit {limit}"
+        );
+        // Same records whatever the concurrency, including the retry.
+        assert_eq!(record(&store, "RUN-T-PASS-A1")["run_outcome"], "pass");
+        assert_eq!(record(&store, "RUN-T-FAIL-A1")["run_outcome"], "fail");
+        assert_eq!(
+            record(&store, "RUN-T-RETRY-A1")["run_outcome"],
+            "not_scored"
+        );
+        assert_eq!(record(&store, "RUN-T-RETRY-A2")["run_outcome"], "pass");
+        assert_eq!(store.metadata().count_records(Some("run")).unwrap(), 5);
+    }
+}
+
+/// A schema-valid task_revision with the given criteria and validity.
+fn task_revision(id: &str, criteria: &[(&str, &str)], validity: &str) -> Value {
+    let mut record: Value = serde_json::from_str(
+        &fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../contracts/fixtures/valid/task-revision.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    record["record_id"] = json!(id);
+    record["validity_state"] = json!(validity);
+    if validity == "invalid" {
+        record["validity_notes"] = json!("Expected outputs were found to be wrong.");
+    }
+    record["acceptance_criteria"] = json!(criteria
+        .iter()
+        .map(|(cid, criticality)| json!({
+            "criterion_id": cid,
+            "description": "Captured stdout matches.",
+            "verification_requirement": "Compare stdout exactly.",
+            "criticality": criticality
+        }))
+        .collect::<Vec<_>>());
+    record["verification_plan"]["required_criterion_ids"] =
+        json!(criteria.iter().map(|(cid, _)| cid).collect::<Vec<_>>());
+    record
+}
+
+async fn outcomes_under(task: Value) -> (Value, Value, Value) {
+    let dir = TempDir::new(&format!(
+        "policy-{}",
+        task["validity_state"].as_str().unwrap()
+    ));
+    let dir = TempDir(
+        dir.0.join(
+            task["acceptance_criteria"][0]["criticality"]
+                .as_str()
+                .unwrap_or("none"),
+        ),
+    );
+    let store = LocalStore::open(&dir.0).unwrap();
+    store.metadata().put_record(&task).unwrap();
+    store
+        .metadata()
+        .create_schedule(&schedule(&["T-PASS", "T-FAIL", "T-UNKNOWN"]))
+        .unwrap();
+    let runner = ScriptedRunner::new(&[
+        ("T-PASS", &[Script::Stdout("hello\n")]),
+        ("T-FAIL", &[Script::Stdout("goodbye\n")]),
+        ("T-UNKNOWN", &[Script::Stdout("x\n")]),
+    ]);
+    run(&store, &runner).await;
+    (
+        record(&store, "RUN-T-PASS-A1"),
+        record(&store, "RUN-T-FAIL-A1"),
+        record(&store, "RUN-T-UNKNOWN-A1"),
+    )
+}
+
+#[tokio::test]
+async fn outcome_rules_follow_the_stored_task_revision() {
+    let criterion = "stdout-equals-expected";
+
+    // Mandatory: a failure fails; an unjudged required criterion is
+    // inconclusive (the default without a policy would be not_scored).
+    let (pass, fail, unknown) = outcomes_under(task_revision(
+        "TASK-1",
+        &[(criterion, "mandatory")],
+        "valid",
+    ))
+    .await;
+    assert_eq!(pass["run_outcome"], "pass");
+    assert_eq!(fail["run_outcome"], "fail");
+    assert_eq!(unknown["verification_state"], "unavailable");
+    assert_eq!(unknown["run_outcome"], "inconclusive");
+
+    // Minor: a failed minor criterion does not fail the run, but the
+    // verification state still shows the failure.
+    let (_, fail, _) =
+        outcomes_under(task_revision("TASK-1", &[(criterion, "minor")], "valid")).await;
+    assert_eq!(fail["verification_state"], "verified_fail");
+    assert_eq!(fail["run_outcome"], "pass");
+
+    // An invalid task revision makes every outcome invalid.
+    let (pass, fail, unknown) = outcomes_under(task_revision(
+        "TASK-1",
+        &[(criterion, "mandatory")],
+        "invalid",
+    ))
+    .await;
+    for run in [pass, fail, unknown] {
+        assert_eq!(run["run_outcome"], "invalid");
+    }
 }

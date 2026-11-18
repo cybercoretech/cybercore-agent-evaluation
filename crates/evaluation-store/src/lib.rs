@@ -34,7 +34,8 @@ pub use error::{StoreError, StoreResult};
 pub use local::{LocalStore, ReconcileReport};
 pub use metadata::{PutOutcome, RecordRef, SqliteMetadataStore, UploadState};
 pub use recorder::{
-    aggregate, CriterionVerdict, RecordReport, RunRecorderConfig, StdoutEqualsVerifier,
-    VerdictResult, VerificationInput, Verifier, VerifierIdentity, VerifierType,
+    aggregate, CriterionVerdict, Criticality, OutcomePolicy, RecordReport, RunRecorderConfig,
+    StdoutEqualsVerifier, VerdictResult, VerificationInput, Verifier, VerifierIdentity,
+    VerifierType,
 };
 pub use scheduler::{DurableScheduler, RecoveryReport, INTERRUPTED_ATTEMPT_MESSAGE};

@@ -18,7 +18,7 @@ use cybercore_evaluation_core::{
     RunnerErrorKind, RunnerResult, RunnerType, TrialDefinition,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const SCHEMA_VERSION: &str = "0.1.0";
 const COMPONENT: &str = "cybercore-evaluation-store/run-recorder";
@@ -336,6 +336,16 @@ impl LocalStore {
         Ok(report)
     }
 
+    /// The outcome policy declared by a stored `task_revision`, if any.
+    fn outcome_policy(&self, task_revision_id: &str) -> StoreResult<Option<OutcomePolicy>> {
+        match self.metadata().get_record(task_revision_id)? {
+            Some(record) if record["record_type"] == "task_revision" => {
+                OutcomePolicy::from_task_revision(&record).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Records one attempt the caller just completed, without re-reading the
     /// journal. `reserved_at` is when the caller reserved it.
     pub(crate) fn record_attempt(
@@ -455,6 +465,7 @@ impl LocalStore {
         // Independent verification, only for executions that finished.
         let mut verification_refs = Vec::new();
         let mut verdict_results = Vec::new();
+        let mut judged: Vec<(String, VerdictResult)> = Vec::new();
         let finished = matches!(
             (attempt.status, attempt.result),
             (AttemptStatus::Finished, Ok(r)) if r.disposition == ExecutionDisposition::Finished
@@ -524,13 +535,22 @@ impl LocalStore {
                     "record_type": "verification_result"
                 }));
                 verdict_results.push(verdict.result);
+                judged.push((verdict.criterion_id.clone(), verdict.result));
             }
         }
 
-        let (verification_state, run_outcome) = if finished {
+        // Outcome rules come from the trial's stored task_revision when there
+        // is one; otherwise the conservative default aggregation applies.
+        let policy = self.outcome_policy(&attempt.trial.task_revision_ref.record_id)?;
+        let (verification_state, default_outcome) = if finished {
             aggregate(&verdict_results)
         } else {
             ("not_started", "not_scored")
+        };
+        let run_outcome = match (&policy, finished) {
+            (Some(policy), _) if policy.task_invalid => "invalid",
+            (Some(policy), true) => policy.outcome(&judged),
+            _ => default_outcome,
         };
 
         let (started_at, ended_at) = execution_window(attempt);
@@ -603,6 +623,99 @@ impl LocalStore {
 
         self.metadata().put_records(&records)?;
         Ok(())
+    }
+}
+
+/// How much a criterion matters, from a task revision's acceptance criteria.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Criticality {
+    Mandatory,
+    Major,
+    Minor,
+}
+
+/// Run-outcome rules declared by a `task_revision` record: each acceptance
+/// criterion's criticality, the criteria verification must cover
+/// (`verification_plan.required_criterion_ids`), and the task's validity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomePolicy {
+    criteria: BTreeMap<String, Criticality>,
+    required: BTreeSet<String>,
+    task_invalid: bool,
+}
+
+impl OutcomePolicy {
+    /// Reads the policy from a stored (schema-valid) task_revision record.
+    pub fn from_task_revision(record: &Value) -> StoreResult<Self> {
+        let bad = |what: &str| {
+            StoreError::InvalidRecord(format!(
+                "task_revision {}: {what}",
+                record["record_id"].as_str().unwrap_or("?")
+            ))
+        };
+        let mut criteria = BTreeMap::new();
+        for criterion in record["acceptance_criteria"]
+            .as_array()
+            .ok_or_else(|| bad("acceptance_criteria is missing"))?
+        {
+            let id = criterion["criterion_id"]
+                .as_str()
+                .ok_or_else(|| bad("criterion_id is missing"))?;
+            let criticality = match criterion["criticality"].as_str() {
+                Some("mandatory") => Criticality::Mandatory,
+                Some("major") => Criticality::Major,
+                Some("minor") => Criticality::Minor,
+                _ => return Err(bad("criticality must be mandatory, major or minor")),
+            };
+            criteria.insert(id.to_string(), criticality);
+        }
+        let required = record["verification_plan"]["required_criterion_ids"]
+            .as_array()
+            .ok_or_else(|| bad("verification_plan.required_criterion_ids is missing"))?
+            .iter()
+            .filter_map(|id| id.as_str().map(str::to_string))
+            .collect();
+        Ok(Self {
+            criteria,
+            required,
+            task_invalid: record["validity_state"] == "invalid",
+        })
+    }
+
+    /// The run outcome for a finished, verified attempt:
+    /// - a failed **mandatory** criterion fails the run, whatever else is
+    ///   known (no average compensates for a mandatory gate);
+    /// - a failed **major** criterion fails the run;
+    /// - otherwise a required criterion that is unjudged, inconclusive,
+    ///   unavailable or mixed makes the run inconclusive;
+    /// - otherwise the run passes; **minor** failures stay visible in the
+    ///   verification records and the `mixed` verification state.
+    ///
+    /// Required criteria not listed in `acceptance_criteria` count as major.
+    pub fn outcome(&self, judged: &[(String, VerdictResult)]) -> &'static str {
+        use VerdictResult::*;
+        let results: BTreeMap<&str, VerdictResult> =
+            judged.iter().map(|(id, r)| (id.as_str(), *r)).collect();
+        let criticality = |id: &str| self.criteria.get(id).copied().unwrap_or(Criticality::Major);
+        let failed = |level: Criticality| {
+            results
+                .iter()
+                .any(|(id, r)| *r == Fail && criticality(id) == level)
+        };
+        if failed(Criticality::Mandatory) || failed(Criticality::Major) {
+            return "fail";
+        }
+        if self.required.is_empty() && results.is_empty() {
+            return "not_scored";
+        }
+        let unresolved = self
+            .required
+            .iter()
+            .any(|id| !matches!(results.get(id.as_str()), Some(Pass) | Some(Fail)));
+        if unresolved {
+            return "inconclusive";
+        }
+        "pass"
     }
 }
 
@@ -753,6 +866,67 @@ mod tests {
             aggregate(&[Pass, Unavailable]),
             ("inconclusive", "inconclusive")
         );
+    }
+
+    fn policy(criteria: &[(&str, &str)], required: &[&str], validity: &str) -> OutcomePolicy {
+        OutcomePolicy::from_task_revision(&json!({
+            "record_id": "TASK-1",
+            "validity_state": validity,
+            "acceptance_criteria": criteria.iter().map(|(id, c)| json!({
+                "criterion_id": id, "criticality": c,
+                "description": "d", "verification_requirement": "v"
+            })).collect::<Vec<_>>(),
+            "verification_plan": {"required_criterion_ids": required}
+        }))
+        .unwrap()
+    }
+
+    fn judged(items: &[(&str, VerdictResult)]) -> Vec<(String, VerdictResult)> {
+        items.iter().map(|(id, r)| (id.to_string(), *r)).collect()
+    }
+
+    #[test]
+    fn mandatory_failures_are_decisive_and_minor_failures_do_not_fail() {
+        let p = policy(
+            &[("gate", "mandatory"), ("core", "major"), ("style", "minor")],
+            &["gate", "core", "style"],
+            "valid",
+        );
+        assert_eq!(
+            p.outcome(&judged(&[("gate", Pass), ("core", Pass), ("style", Pass)])),
+            "pass"
+        );
+        assert_eq!(
+            p.outcome(&judged(&[("gate", Pass), ("core", Pass), ("style", Fail)])),
+            "pass"
+        );
+        assert_eq!(
+            p.outcome(&judged(&[("gate", Pass), ("core", Fail), ("style", Pass)])),
+            "fail"
+        );
+        // A mandatory failure decides even when other criteria are unknown.
+        assert_eq!(p.outcome(&judged(&[("gate", Fail)])), "fail");
+        assert_eq!(
+            p.outcome(&judged(&[
+                ("gate", Pass),
+                ("core", Inconclusive),
+                ("style", Pass)
+            ])),
+            "inconclusive"
+        );
+        assert_eq!(
+            p.outcome(&judged(&[("gate", Pass), ("style", Pass)])),
+            "inconclusive"
+        );
+    }
+
+    #[test]
+    fn unlisted_required_criteria_count_as_major_and_empty_policies_do_not_pass() {
+        let p = policy(&[], &["extra"], "valid");
+        assert_eq!(p.outcome(&judged(&[("extra", Fail)])), "fail");
+        assert_eq!(p.outcome(&judged(&[("extra", Pass)])), "pass");
+        assert_eq!(policy(&[], &[], "valid").outcome(&[]), "not_scored");
+        assert!(policy(&[], &[], "invalid").task_invalid);
     }
 
     #[test]

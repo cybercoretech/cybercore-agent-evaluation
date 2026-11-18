@@ -17,7 +17,7 @@ printf '\n== JSON Schema strict-keyword audit ==\n'
 python3 "$ROOT/scripts/audit_schema_keyword_types.py"
 
 printf '\n== TypeScript / Ajv conformance ==\n'
-npm --prefix "$TS_DIR" install
+npm --prefix "$TS_DIR" ci
 npm --prefix "$TS_DIR" test
 
 printf '\n== Rust evaluation-core unit tests ==\n'

@@ -25,7 +25,8 @@ use cybercore_evaluation_core::{
     AttemptIdentity, EvaluationSchedule, LocalProcessRunner, RecordReference,
 };
 use cybercore_evaluation_store::{
-    run_ready_trials, DurableScheduler, LocalStore, PutOutcome, RunRecorderConfig,
+    run_ready_trials, ContractValidator, DurableScheduler, LocalStore, OutcomePolicy, PutOutcome,
+    RunRecorderConfig,
 };
 use evaluation_file::EvaluationFile;
 use serde_json::{json, Value};
@@ -133,6 +134,13 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
         .map_err(|error| format!("{}: schedule: {error}", file.display()))?;
     check_identity_lengths(&evaluation.schedule)?;
 
+    let validator = ContractValidator::embedded().map_err(|e| e.to_string())?;
+    for (index, record) in evaluation.task_revisions.iter().enumerate() {
+        validator
+            .validate(record)
+            .map_err(|e| format!("{}: task_revisions[{index}]: {e}", file.display()))?;
+    }
+
     if dry_run {
         return print_plan(store_dir, &evaluation);
     }
@@ -145,6 +153,13 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
     {
         PutOutcome::Inserted => say!("created {evaluation_id} in {}", store_dir.display()),
         PutOutcome::AlreadyPresent => say!("resuming {evaluation_id} in {}", store_dir.display()),
+    }
+
+    if !evaluation.task_revisions.is_empty() {
+        store
+            .metadata()
+            .put_records(&evaluation.task_revisions)
+            .map_err(|e| format!("task_revisions: {e}"))?;
     }
 
     let runner = LocalProcessRunner::new(evaluation.runner_config(store_dir.join("runner-tmp")))
@@ -195,7 +210,11 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
             report.caught_up.written.join(", ")
         );
     }
-    say!("executed {} attempt(s)\n", report.executed.len());
+    say!(
+        "executed {} attempt(s), up to {} at once\n",
+        report.executed.len(),
+        report.peak_concurrency
+    );
     print_status(&store, &evaluation_id, false)
 }
 
@@ -384,6 +403,36 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
             ))
         }
         None => say!("state       new evaluation"),
+    }
+    say!(
+        "concurrency up to {} attempt(s) at once",
+        evaluation.schedule.max_active_runs
+    );
+    if evaluation.task_revisions.is_empty() {
+        say!("outcomes    default rules (no task_revisions in the file)");
+    }
+    for record in &evaluation.task_revisions {
+        OutcomePolicy::from_task_revision(record).map_err(|e| e.to_string())?;
+        let criteria: Vec<String> = record["acceptance_criteria"]
+            .as_array()
+            .map(|all| {
+                all.iter()
+                    .map(|c| {
+                        format!(
+                            "{} ({})",
+                            c["criterion_id"].as_str().unwrap_or("?"),
+                            c["criticality"].as_str().unwrap_or("?")
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        say!(
+            "outcomes    {} [{}]: {}",
+            record["record_id"].as_str().unwrap_or("?"),
+            record["validity_state"].as_str().unwrap_or("?"),
+            criteria.join(", ")
+        );
     }
     say!("\ntrials ({}):", evaluation.schedule.trials.len());
     let unverifiable = evaluation.unverifiable_trials();

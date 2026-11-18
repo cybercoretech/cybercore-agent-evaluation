@@ -155,6 +155,27 @@ fn bad_files_name_the_file_and_the_field() {
             }),
             "max_active_runs must be greater than zero",
         ),
+        (
+            "task revision type",
+            Box::new(|v| {
+                v["task_revisions"][0]["record_type"] = "run".into();
+            }),
+            "task_revisions[0].record_type must be \"task_revision\"",
+        ),
+        (
+            "task revision id",
+            Box::new(|v| {
+                v["task_revisions"][0]["record_id"] = "TASK-ELSEWHERE".into();
+            }),
+            "is not the task_revision_ref of any trial",
+        ),
+        (
+            "task revision schema",
+            Box::new(|v| {
+                v["task_revisions"][0]["acceptance_criteria"][0]["criticality"] = "vital".into();
+            }),
+            "task_revisions[0]: invalid record",
+        ),
     ];
     for (name, mutate, expected) in cases {
         let mut value = example();
@@ -254,7 +275,7 @@ fn run_executes_records_and_resumes_idempotently() {
     assert!(first.status.success(), "{}", stderr(&first));
     let text = stdout(&first);
     assert!(text.contains("created EVAL-CAT-SMOKE"));
-    assert!(text.contains("executed 2 attempt(s)"));
+    assert!(text.contains("executed 2 attempt(s), up to 2 at once"));
     assert!(text.contains("latest attempt per trial: 1 fail, 1 pass"));
 
     let again = workbench(&["run", file, "--store", store_arg], &[]);
@@ -278,7 +299,7 @@ fn run_executes_records_and_resumes_idempotently() {
 
     // The same evaluation ID with a changed schedule is refused.
     let mut changed = example();
-    changed["schedule"]["max_active_runs"] = 2.into();
+    changed["schedule"]["max_active_runs"] = 3.into();
     let changed_file = dir.file("changed.json", &changed);
     let refused = workbench(
         &[

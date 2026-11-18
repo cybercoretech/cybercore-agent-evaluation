@@ -25,6 +25,11 @@ pub struct EvaluationFile {
     /// so only enable this for non-sensitive tasks.
     #[serde(default)]
     pub store_output_evidence: bool,
+    /// `task_revision` records stored before the run. Their acceptance
+    /// criteria (criticality) and required criteria set each run's outcome
+    /// rules; trials whose task revision is absent use the default rules.
+    #[serde(default)]
+    pub task_revisions: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +145,25 @@ impl EvaluationFile {
                         "schedule.trials[{id}].task_input.executable_id is required by the local_bubblewrap runner"
                     ))
                 }
+            }
+        }
+        let task_ids: BTreeSet<&str> = self
+            .schedule
+            .trials
+            .iter()
+            .map(|t| t.task_revision_ref.record_id.as_str())
+            .collect();
+        for (index, record) in self.task_revisions.iter().enumerate() {
+            if record["record_type"] != "task_revision" {
+                return Err(format!(
+                    "task_revisions[{index}].record_type must be \"task_revision\""
+                ));
+            }
+            let id = record["record_id"].as_str().unwrap_or("");
+            if !task_ids.contains(id) {
+                return Err(format!(
+                    "task_revisions[{index}].record_id {id:?} is not the task_revision_ref of any trial"
+                ));
             }
         }
         let VerifierSpec::StdoutEquals { expected } = &self.verifier;

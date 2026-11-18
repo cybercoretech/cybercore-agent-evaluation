@@ -36,11 +36,12 @@ TRIAL-NUMBERS fails on purpose: its expected output says `4` where the file cont
 | Field | Meaning |
 |---|---|
 | `format` | `cybercore-workbench-evaluation/v0` |
-| `schedule` | the frozen `EvaluationSchedule`: trials, budgets, deny-all policies, retry policy. It's immutable once stored. |
+| `schedule` | the frozen `EvaluationSchedule`: trials, budgets, deny-all policies, retry policy, and `max_active_runs` (how many attempts run at once). It's immutable once stored. |
 | `runner` | `{"type": "local_bubblewrap", "allowed_executables": {...}, "limits": {...}}`; every trial's `task_input.executable_id` must be listed |
 | `verifier` | `{"type": "stdout_equals", "expected": {"TRIAL-ID": "exact stdout"}}`. This is hidden grader data, never part of a `task_input`. |
 | `project_ref` | the project the output evidence belongs to |
 | `store_output_evidence` | `true` stores each runner output as evidence. Only use it for non-sensitive tasks: the local runner does not redact. |
+| `task_revisions` | optional `task_revision` records stored before the run. Their criteria's `criticality` (mandatory, major or minor) and `required_criterion_ids` decide each run's outcome ([ADR-0013](../../docs/decisions/0013-concurrency-and-outcome-rules.md)). |
 
 Unknown fields are rejected, and every error names the file and the field.
 

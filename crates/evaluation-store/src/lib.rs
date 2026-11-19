@@ -15,6 +15,7 @@
 //! core's records, not the other way round. The SQL in `migrations/` is plain
 //! SQLite so a Cloudflare D1 adapter can apply the same schema.
 
+pub mod analysis;
 mod artifact;
 mod canonical;
 mod checks;

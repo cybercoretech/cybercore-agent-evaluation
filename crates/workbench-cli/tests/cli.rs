@@ -1061,3 +1061,118 @@ fn egress_example_runs_against_a_local_stub_without_leaking_the_token() {
         }
     }
 }
+
+/// Twelve one-trial tasks; the first `passes` produce the expected output.
+fn twelve_task_evaluation(id: &str, passes: usize) -> Value {
+    let mut value = load_example("cat-smoke.json");
+    value["schedule"]["evaluation_ref"]["record_id"] = id.into();
+    value["schedule"]["plan_ref"]["record_id"] = format!("PLAN-{id}").into();
+    let template = value["schedule"]["trials"][0].clone();
+    let mut trials = Vec::new();
+    let mut expected = serde_json::Map::new();
+    for i in 0..12 {
+        let mut trial = template.clone();
+        trial["trial_ref"]["record_id"] = format!("TRIAL-{i}").into();
+        trial["task_revision_ref"]["record_id"] = format!("TASK-{i}").into();
+        let content = if i < passes {
+            format!("answer {i}\n")
+        } else {
+            "wrong\n".into()
+        };
+        trial["task_input"]["files"][0]["content"] = content.into();
+        trials.push(trial);
+        expected.insert(format!("TRIAL-{i}"), format!("answer {i}\n").into());
+    }
+    value["schedule"]["trials"] = trials.into();
+    value["verifier"] = serde_json::json!({"type": "stdout_equals", "expected": expected});
+    value["task_revisions"] = serde_json::json!([]);
+    value
+}
+
+#[test]
+fn summary_and_compare_over_real_runs() {
+    let dir = TempDir::new("summary");
+    let store = dir.0.join("store");
+    for (id, passes) in [("EVAL-BASE", 4), ("EVAL-TREAT", 11)] {
+        let file = dir.file(&format!("{id}.json"), &twelve_task_evaluation(id, passes));
+        let output = workbench(
+            &["run", file.to_str().unwrap()],
+            &[("WORKBENCH_STORE", &store)],
+        );
+        if !output.status.success() && stderr(&output).contains("runner:") {
+            assert!(
+                std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+                "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+                stderr(&output).trim()
+            );
+            eprintln!(
+                "SKIPPED: Bubblewrap is unavailable here: {}",
+                stderr(&output).trim()
+            );
+            return;
+        }
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+
+    let summary = workbench(
+        &["summary", "EVAL-BASE", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(summary.status.success(), "{}", stderr(&summary));
+    let base: Value = serde_json::from_str(&stdout(&summary)).unwrap();
+    assert_eq!(
+        (base["passes"].as_u64(), base["denominator"].as_u64()),
+        (Some(4), Some(12))
+    );
+    assert_eq!(base["status"], "computed");
+    assert_eq!(base["interval"]["method"], "wilson");
+    let (lower, upper) = (
+        base["interval"]["lower"].as_f64().unwrap(),
+        base["interval"]["upper"].as_f64().unwrap(),
+    );
+    assert!(
+        (lower - 0.1381).abs() < 1e-3 && (upper - 0.6094).abs() < 1e-3,
+        "{lower} {upper}"
+    );
+    let again = workbench(
+        &["summary", "EVAL-BASE", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let again: Value = serde_json::from_str(&stdout(&again)).unwrap();
+    assert_eq!(
+        again["metric_result_id"], base["metric_result_id"],
+        "unchanged results reuse their record"
+    );
+
+    let compare = workbench(
+        &["compare", "EVAL-BASE", "EVAL-TREAT", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(compare.status.success(), "{}", stderr(&compare));
+    let report: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    let comparison = &report["comparison"];
+    assert_eq!(comparison["status"], "comparable", "{report:#}");
+    assert_eq!(comparison["design"], "blocked_paired");
+    assert_eq!(comparison["matched_tasks"], 12);
+    assert!((comparison["difference"].as_f64().unwrap() - 7.0 / 12.0).abs() < 1e-9);
+    assert!((comparison["p_value"].as_f64().unwrap() - 0.015625).abs() < 1e-9);
+    assert_eq!(comparison["direction"], "favors_treatment");
+
+    let text = workbench(
+        &["compare", "EVAL-BASE", "EVAL-TREAT"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(
+        stdout(&text).contains("difference  +0.583"),
+        "{}",
+        stdout(&text)
+    );
+
+    let unknown = workbench(&["summary", "EVAL-NOPE"], &[("WORKBENCH_STORE", &store)]);
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(
+        stderr(&unknown).contains("unknown evaluation EVAL-NOPE"),
+        "{}",
+        stderr(&unknown)
+    );
+}

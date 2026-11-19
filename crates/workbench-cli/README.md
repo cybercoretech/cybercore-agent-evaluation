@@ -29,6 +29,25 @@ EVAL-CAT-SMOKE
 
 TRIAL-NUMBERS fails on purpose: its expected output says `4` where the file contains `3`.
 
+## 📊 Summaries and comparisons
+
+`workbench summary EVAL` gives an evaluation's pass rate with a 95% interval, and `workbench compare BASELINE TREATMENT` compares two evaluations run on the same tasks, for example two agents or two versions of one ([ADR-0020](../../docs/decisions/0020-cross-run-summaries.md)). Both accept `--json`.
+
+```
+EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
+  baseline    0.333 (4 of 12)
+  treatment   0.917 (11 of 12)
+  difference  +0.583   95% interval +0.333 to +0.833   (paired over 12 task(s))
+  McNemar     p = 0.0156
+  direction   favors treatment
+  status      comparable
+```
+
+- **The pass rate:** each planned trial counts once, by its latest attempt. Trials **without a verdict** (inconclusive or not scored) **count as not passed**, and the summary says how many there were. Invalidated runs are excluded. Trials not run yet make the result provisional.
+- **The interval:** Wilson's when each task ran once. When a task ran more than once, it's a bootstrap over tasks, so repeats don't count as independent evidence. With fewer than 5 tasks no bootstrap interval is given, and with fewer than 10 trials the result is "descriptive only".
+- **Comparisons are paired by task.** They give the difference, a bootstrap interval and (for one trial per task) McNemar's exact test, and they're labelled exploratory. Evaluations over different task revisions are reported as **not comparable** rather than compared.
+- **Records:** each command records its result as `metric_result`, `analysis_result` or `comparison_result` records. Summarising unchanged results again writes nothing new.
+
 ## 📄 Evaluation files
 
 `evaluations/cat-smoke.json` is a complete example. Its top-level fields:

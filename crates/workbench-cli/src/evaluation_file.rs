@@ -429,6 +429,17 @@ impl EvaluationFile {
         Ok(file)
     }
 
+    /// An evaluation file built in memory (a suite's expansion), checked
+    /// exactly as [`EvaluationFile::load`] checks a file. `origin` names it
+    /// in errors.
+    pub fn from_value(value: Value, origin: &str) -> Result<Self, String> {
+        let file: Self =
+            serde_json::from_value(value).map_err(|error| format!("{origin}: {error}"))?;
+        file.check()
+            .map_err(|message| format!("{origin}: {message}"))?;
+        Ok(file)
+    }
+
     fn check(&self) -> Result<(), String> {
         if self.format != FORMAT {
             return Err(format!(

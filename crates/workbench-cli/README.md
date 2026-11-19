@@ -29,6 +29,51 @@ EVAL-CAT-SMOKE
 
 TRIAL-NUMBERS fails on purpose: its expected output says `4` where the file contains `3`.
 
+## 🧩 Task suites
+
+Writing every trial out in full gets long. A **task suite** lists the tasks once and the agents once, and the workbench builds one evaluation per agent ([ADR-0024](../../docs/decisions/0024-task-suites.md)). `evaluations/report-suite.json` is a complete example: a careful and a sloppy shell "agent" on six report tasks, each run twice.
+
+```sh
+./target/release/workbench run crates/workbench-cli/evaluations/report-suite.json --dry-run
+./target/release/workbench run crates/workbench-cli/evaluations/report-suite.json
+./target/release/workbench compare REPORTS-SLOPPY REPORTS-CAREFUL
+
+# Write the generated evaluation files to read (or run on their own)
+./target/release/workbench expand crates/workbench-cli/evaluations/report-suite.json --out generated/
+```
+
+```json
+{
+  "format": "cybercore-workbench-suite/v0",
+  "suite_id": "REPORTS",
+  "repeats": 2,
+  "runner": { "type": "local_bubblewrap", "allowed_executables": {"sh": "/usr/bin/sh"}, "limits": {} },
+  "defaults": { "collect_outputs": true },
+  "agents": [
+    { "agent_id": "CAREFUL", "executable_id": "sh", "args": ["-c", "..."] },
+    { "agent_id": "SLOPPY",  "executable_id": "sh", "args": ["-c", "..."] }
+  ],
+  "tasks": [
+    { "task_id": "SMALL", "family": "arithmetic", "objective": "Write the sum to out/report.txt.",
+      "files": [{"path": "numbers.txt", "content": "1\n2\n3\n"}],
+      "environment": {"TASK_PROMPT": "Sum the numbers ..."},
+      "checks": [{"criterion_id": "total-written", "kind": "file_equals", "path": "out/report.txt", "expected": "6\n"}] }
+  ],
+  "compare": [{ "baseline": "SLOPPY", "treatment": "CAREFUL", "minimum_matched_tasks": 5 }]
+}
+```
+
+- **What it builds:** one evaluation per agent (`REPORTS-CAREFUL`, `REPORTS-SLOPPY`). Each runs every task `repeats` times, as trials `TRIAL-REPORTS-CAREFUL-SMALL-R1` and so on.
+- **Each trial** is the agent's command, plus the task's input files (in `/workspace/input`) and environment variables. Environment names are added to the runner's allowed list automatically. A name can't be set by both an agent and a task.
+- **Task records are generated** from each task (objective, family, difficulty, and criteria from its checks and rubrics), and every agent gets identical ones, so comparisons line up.
+- **Verification:** tasks use the `checks` kinds. A task may add `judge` rubrics; with those, the checks are combined with the model judge, and the suite needs `judge: {"consent_to_send_outputs": true}`.
+- **Network:** an agent with `network: {"hosts": [...]}` gets an allowlist, and with `credentials` it gets granted keys (Podman runner with `egress`).
+- **Comparisons:** `compare` entries are frozen in advance in the treatment's plan, so they can be confirmatory.
+- **Budgets:** each value comes from the task, then the suite's `defaults.budget`, then the runner's limits.
+- **Optional fields:** `project_ref`, `store_output_evidence`, `retry_policy`, `pricing`, `decision_question` and `created_at` (for the generated task records).
+- **Running:** every agent's evaluation is checked before the first one runs, and they then run in the listed order. Running the suite again resumes them.
+- **`expand`** writes ordinary evaluation files. It never overwrites a file with different content. The IDs are fixed, so change `suite_id` when you change the tasks.
+
 ## 📊 Summaries and comparisons
 
 `workbench summary EVAL` gives an evaluation's pass rate with a 95% interval, and `workbench compare BASELINE TREATMENT` compares two evaluations run on the same tasks, for example two agents or two versions of one ([ADR-0020](../../docs/decisions/0020-cross-run-summaries.md)). Both accept `--json`.

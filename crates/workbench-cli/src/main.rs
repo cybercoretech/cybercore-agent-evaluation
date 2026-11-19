@@ -22,6 +22,8 @@ macro_rules! say {
     }};
 }
 
+mod summary;
+
 use clap::{Parser, Subcommand};
 use cybercore_evaluation_core::{AttemptIdentity, EvaluationSchedule, RecordReference};
 use cybercore_evaluation_store::{
@@ -80,6 +82,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Pass rate with a 95% interval for one evaluation.
+    ///
+    /// Trials without a verdict count as not passed; invalidated runs are
+    /// excluded; unrun trials make the result provisional. Records a
+    /// metric_result and analysis_result (once per distinct set of results).
+    Summary {
+        /// Evaluation record ID.
+        evaluation_id: String,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare two evaluations run on the same tasks (paired by task).
+    ///
+    /// Evaluations over different task revisions are reported as not
+    /// comparable. Records a comparison_result.
+    Compare {
+        /// Baseline evaluation record ID.
+        baseline: String,
+        /// Treatment evaluation record ID.
+        treatment: String,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -92,6 +119,15 @@ fn main() -> ExitCode {
                 evaluation_id,
                 json,
             } => status(&store, &evaluation_id, json),
+            Command::Summary {
+                evaluation_id,
+                json,
+            } => summary::summary(&store, &evaluation_id, json),
+            Command::Compare {
+                baseline,
+                treatment,
+                json,
+            } => summary::compare_evaluations(&store, &baseline, &treatment, json),
         },
     };
     match result {

@@ -5,7 +5,8 @@
 //! nonce (so it cannot close them), the system prompt tells the judge to treat
 //! it strictly as data, and every verdict records that model judgments can be
 //! wrong or influenced. Nothing ever turns into a pass by accident: missing
-//! credentials, HTTP errors, refusals, malformed answers and oversized inputs
+//! credentials, HTTP errors (recorded with the API's error type and message),
+//! refusals, malformed answers and oversized inputs
 //! become `unavailable` or `inconclusive` verdicts with the reason.
 //!
 //! There is no official Rust SDK, so this speaks HTTP directly
@@ -133,6 +134,13 @@ impl Verifier for ModelJudgeVerifier {
             version: env!("CARGO_PKG_VERSION").into(),
             verifier_type: VerifierType::ModelJudge,
         }
+    }
+
+    fn covers(&self, trial_id: &str) -> bool {
+        self.config
+            .criteria
+            .get(trial_id)
+            .is_some_and(|c| !c.is_empty())
     }
 
     fn verify(&self, input: &VerificationInput<'_>) -> Vec<CriterionVerdict> {
@@ -346,8 +354,15 @@ fn send(config: &ModelJudgeConfig, credential: &Credential, body: &Value) -> Res
             .pointer("/error/type")
             .and_then(Value::as_str)
             .unwrap_or("unknown_error");
+        // The API's message explains the problem (for example an exhausted
+        // credit balance); it does not repeat the request, so record it.
+        let message = parsed
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .map(|m| format!(": {}", m.chars().take(300).collect::<String>()))
+            .unwrap_or_default();
         return Err(format!(
-            "The judge request failed with HTTP {status} ({kind})."
+            "The judge request failed with HTTP {status} ({kind}){message}"
         ));
     }
     if parsed.is_null() {
@@ -356,7 +371,7 @@ fn send(config: &ModelJudgeConfig, credential: &Credential, body: &Value) -> Res
     Ok(parsed)
 }
 
-/// Error kinds only: messages could echo request details.
+/// Transport error kinds only (these come from the client, not the API).
 fn describe(error: &ureq::Error) -> &'static str {
     match error {
         ureq::Error::Timeout(_) => "timed out",

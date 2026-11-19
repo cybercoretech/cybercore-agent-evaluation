@@ -6,7 +6,7 @@ use cybercore_evaluation_core::{
 };
 use cybercore_evaluation_judge::{Inspect, JudgeCriterion, ModelJudgeConfig, ModelJudgeVerifier};
 use cybercore_evaluation_store::{
-    Check, ChecksVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
+    Check, ChecksVerifier, CompositeVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -162,6 +162,10 @@ pub enum VerifierSpec {
         max_input_bytes: Option<usize>,
         criteria: BTreeMap<String, Vec<JudgeCriterionSpec>>,
     },
+    /// Several verifiers in one evaluation, e.g. exact `checks` for files plus
+    /// a `model_judge` for rubric criteria (ADR-0018). Criterion IDs must be
+    /// unique per trial across the listed verifiers; no nesting.
+    Composite { verifiers: Vec<VerifierSpec> },
 }
 
 /// One judged criterion. Without `file`, the judge reads stdout.
@@ -408,17 +412,49 @@ impl EvaluationFile {
                 }
             }
         }
+        self.check_verifier(&self.verifier, "verifier", true)?;
+        Ok(())
+    }
+
+    /// Validates one verifier spec; `at_root` is its field path for errors.
+    fn check_verifier(&self, spec: &VerifierSpec, at_root: &str, top: bool) -> Result<(), String> {
         let trial_ids: BTreeSet<&str> = self
             .schedule
             .trials
             .iter()
             .map(|t| t.trial_ref.record_id.as_str())
             .collect();
-        match &self.verifier {
+        match spec {
+            VerifierSpec::Composite { verifiers } => {
+                if !top {
+                    return Err(format!(
+                        "{at_root}: a composite verifier cannot contain another composite"
+                    ));
+                }
+                if verifiers.is_empty() {
+                    return Err(format!(
+                        "{at_root}.verifiers must list at least one verifier"
+                    ));
+                }
+                for (index, sub) in verifiers.iter().enumerate() {
+                    self.check_verifier(sub, &format!("{at_root}.verifiers[{index}]"), false)?;
+                }
+                let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
+                for (index, sub) in verifiers.iter().enumerate() {
+                    for key in criterion_ids(sub) {
+                        if let Some(first) = seen.insert(key.clone(), index) {
+                            return Err(format!(
+                                "{at_root}.verifiers[{first}] and {at_root}.verifiers[{index}] both judge criterion {:?} for trial {}; give each verifier its own criterion IDs",
+                                key.1, key.0
+                            ));
+                        }
+                    }
+                }
+            }
             VerifierSpec::StdoutEquals { expected } => {
                 if let Some(unknown) = expected.keys().find(|k| !trial_ids.contains(k.as_str())) {
                     return Err(format!(
-                        "verifier.expected.{unknown} does not name a trial in the schedule"
+                        "{at_root}.expected.{unknown} does not name a trial in the schedule"
                     ));
                 }
             }
@@ -430,17 +466,17 @@ impl EvaluationFile {
                 ..
             } => {
                 if !consent_to_send_outputs {
-                    return Err("verifier.consent_to_send_outputs must be true: the judged outputs are sent to the Anthropic API".into());
+                    return Err(format!("{at_root}.consent_to_send_outputs must be true: the judged outputs are sent to the Anthropic API"));
                 }
                 if let Some(effort) = effort {
                     if !EFFORTS.contains(&effort.as_str()) {
                         return Err(format!(
-                            "verifier.effort {effort:?} must be one of low, medium, high, xhigh, max"
+                            "{at_root}.effort {effort:?} must be one of low, medium, high, xhigh, max"
                         ));
                     }
                 }
                 if *max_input_bytes == Some(0) {
-                    return Err("verifier.max_input_bytes must be positive".into());
+                    return Err(format!("{at_root}.max_input_bytes must be positive"));
                 }
                 for (trial_id, specs) in criteria {
                     let Some(trial) = self
@@ -450,12 +486,12 @@ impl EvaluationFile {
                         .find(|t| &t.trial_ref.record_id == trial_id)
                     else {
                         return Err(format!(
-                            "verifier.criteria.{trial_id} does not name a trial in the schedule"
+                            "{at_root}.criteria.{trial_id} does not name a trial in the schedule"
                         ));
                     };
                     let mut seen = BTreeSet::new();
                     for (index, spec) in specs.iter().enumerate() {
-                        let at = format!("verifier.criteria.{trial_id}[{index}]");
+                        let at = format!("{at_root}.criteria.{trial_id}[{index}]");
                         if !valid_criterion_id(&spec.criterion_id) {
                             return Err(format!(
                                 "{at}.criterion_id {:?} must match [A-Za-z0-9][A-Za-z0-9._:-]{{0,63}}",
@@ -495,12 +531,12 @@ impl EvaluationFile {
                         .find(|t| &t.trial_ref.record_id == trial_id)
                     else {
                         return Err(format!(
-                            "verifier.checks.{trial_id} does not name a trial in the schedule"
+                            "{at_root}.checks.{trial_id} does not name a trial in the schedule"
                         ));
                     };
                     let mut seen = BTreeSet::new();
                     for (index, spec) in specs.iter().enumerate() {
-                        let at = format!("verifier.checks.{trial_id}[{index}]");
+                        let at = format!("{at_root}.checks.{trial_id}[{index}]");
                         let criterion = spec.criterion_id();
                         if !valid_criterion_id(criterion) {
                             return Err(format!(
@@ -536,13 +572,7 @@ impl EvaluationFile {
     /// Trials the verifier has no expectation for (they will be recorded as
     /// verification `unavailable`, never as passing).
     pub fn unverifiable_trials(&self) -> Vec<&str> {
-        let configured = |id: &str| match &self.verifier {
-            VerifierSpec::StdoutEquals { expected } => expected.contains_key(id),
-            VerifierSpec::Checks { checks } => checks.get(id).is_some_and(|c| !c.is_empty()),
-            VerifierSpec::ModelJudge { criteria, .. } => {
-                criteria.get(id).is_some_and(|c| !c.is_empty())
-            }
-        };
+        let configured = |id: &str| spec_covers(&self.verifier, id);
         self.schedule
             .trials
             .iter()
@@ -553,19 +583,7 @@ impl EvaluationFile {
 
     /// One line describing the verifier for `--dry-run`.
     pub fn verifier_summary(&self) -> String {
-        match &self.verifier {
-            VerifierSpec::StdoutEquals { .. } => "stdout_equals (deterministic)".into(),
-            VerifierSpec::Checks { .. } => "checks (deterministic)".into(),
-            VerifierSpec::ModelJudge { model, effort, .. } => format!(
-                "model_judge ({}, effort {}): judged outputs are sent to the Anthropic API",
-                model
-                    .as_deref()
-                    .unwrap_or(cybercore_evaluation_judge::DEFAULT_MODEL),
-                effort
-                    .as_deref()
-                    .unwrap_or(cybercore_evaluation_judge::DEFAULT_EFFORT)
-            ),
-        }
+        summary(&self.verifier)
     }
 
     /// True when any trial asks the runner to collect `/workspace/output`.
@@ -652,58 +670,127 @@ impl EvaluationFile {
     }
 
     pub fn verifier(&self) -> Box<dyn Verifier> {
-        match &self.verifier {
-            VerifierSpec::StdoutEquals { expected } => {
-                Box::new(StdoutEqualsVerifier::new(expected.clone()))
-            }
-            VerifierSpec::ModelJudge {
-                model,
-                effort,
-                max_input_bytes,
-                criteria,
-                ..
-            } => {
-                let criteria = criteria
-                    .iter()
-                    .map(|(trial, specs)| {
-                        let judged = specs
-                            .iter()
-                            .map(|spec| JudgeCriterion {
-                                criterion_id: spec.criterion_id.clone(),
-                                rubric: spec.rubric.clone(),
-                                inspect: match &spec.file {
-                                    Some(path) => Inspect::File(path.clone()),
-                                    None => Inspect::Stdout,
-                                },
-                            })
-                            .collect();
-                        (trial.clone(), judged)
-                    })
-                    .collect();
-                let mut config = ModelJudgeConfig::new(criteria);
-                if let Some(model) = model {
-                    config = config.with_model(model.clone());
-                }
-                if let Some(effort) = effort {
-                    config.effort = effort.clone();
-                }
-                if let Some(limit) = max_input_bytes {
-                    config.max_input_bytes = *limit;
-                }
-                Box::new(ModelJudgeVerifier::new(config))
-            }
-            VerifierSpec::Checks { checks } => Box::new(ChecksVerifier::new(
-                checks
-                    .iter()
-                    .map(|(trial, specs)| {
-                        (
-                            trial.clone(),
-                            specs.iter().map(CheckSpec::to_check).collect(),
-                        )
-                    })
-                    .collect(),
-            )),
+        build_verifier(&self.verifier)
+    }
+}
+
+fn build_verifier(spec: &VerifierSpec) -> Box<dyn Verifier> {
+    match spec {
+        VerifierSpec::Composite { verifiers } => Box::new(CompositeVerifier::new(
+            verifiers.iter().map(build_verifier).collect(),
+        )),
+        VerifierSpec::StdoutEquals { expected } => {
+            Box::new(StdoutEqualsVerifier::new(expected.clone()))
         }
+        VerifierSpec::ModelJudge {
+            model,
+            effort,
+            max_input_bytes,
+            criteria,
+            ..
+        } => {
+            let criteria = criteria
+                .iter()
+                .map(|(trial, specs)| {
+                    let judged = specs
+                        .iter()
+                        .map(|spec| JudgeCriterion {
+                            criterion_id: spec.criterion_id.clone(),
+                            rubric: spec.rubric.clone(),
+                            inspect: match &spec.file {
+                                Some(path) => Inspect::File(path.clone()),
+                                None => Inspect::Stdout,
+                            },
+                        })
+                        .collect();
+                    (trial.clone(), judged)
+                })
+                .collect();
+            let mut config = ModelJudgeConfig::new(criteria);
+            if let Some(model) = model {
+                config = config.with_model(model.clone());
+            }
+            if let Some(effort) = effort {
+                config.effort = effort.clone();
+            }
+            if let Some(limit) = max_input_bytes {
+                config.max_input_bytes = *limit;
+            }
+            Box::new(ModelJudgeVerifier::new(config))
+        }
+        VerifierSpec::Checks { checks } => Box::new(ChecksVerifier::new(
+            checks
+                .iter()
+                .map(|(trial, specs)| {
+                    (
+                        trial.clone(),
+                        specs.iter().map(CheckSpec::to_check).collect(),
+                    )
+                })
+                .collect(),
+        )),
+    }
+}
+
+fn spec_covers(spec: &VerifierSpec, trial_id: &str) -> bool {
+    match spec {
+        VerifierSpec::StdoutEquals { expected } => expected.contains_key(trial_id),
+        VerifierSpec::Checks { checks } => checks.get(trial_id).is_some_and(|c| !c.is_empty()),
+        VerifierSpec::ModelJudge { criteria, .. } => {
+            criteria.get(trial_id).is_some_and(|c| !c.is_empty())
+        }
+        VerifierSpec::Composite { verifiers } => verifiers.iter().any(|v| spec_covers(v, trial_id)),
+    }
+}
+
+fn summary(spec: &VerifierSpec) -> String {
+    match spec {
+        VerifierSpec::StdoutEquals { .. } => "stdout_equals (deterministic)".into(),
+        VerifierSpec::Checks { .. } => "checks (deterministic)".into(),
+        VerifierSpec::ModelJudge { model, effort, .. } => format!(
+            "model_judge ({}, effort {}): judged outputs are sent to the Anthropic API",
+            model
+                .as_deref()
+                .unwrap_or(cybercore_evaluation_judge::DEFAULT_MODEL),
+            effort
+                .as_deref()
+                .unwrap_or(cybercore_evaluation_judge::DEFAULT_EFFORT)
+        ),
+        VerifierSpec::Composite { verifiers } => format!(
+            "composite of {}",
+            verifiers
+                .iter()
+                .map(summary)
+                .collect::<Vec<_>>()
+                .join(" + ")
+        ),
+    }
+}
+
+/// (trial ID, criterion ID) pairs a verifier spec can produce.
+fn criterion_ids(spec: &VerifierSpec) -> Vec<(String, String)> {
+    match spec {
+        VerifierSpec::StdoutEquals { expected } => expected
+            .keys()
+            .map(|t| (t.clone(), "stdout-equals-expected".to_string()))
+            .collect(),
+        VerifierSpec::Checks { checks } => checks
+            .iter()
+            .flat_map(|(t, specs)| {
+                specs
+                    .iter()
+                    .map(move |c| (t.clone(), c.criterion_id().to_string()))
+            })
+            .collect(),
+        VerifierSpec::ModelJudge { criteria, .. } => criteria
+            .iter()
+            .flat_map(|(t, specs)| {
+                specs
+                    .iter()
+                    .map(move |c| (t.clone(), c.criterion_id.clone()))
+            })
+            .collect(),
+        VerifierSpec::Composite { verifiers } => verifiers.iter().flat_map(criterion_ids).collect(),
     }
 }
 

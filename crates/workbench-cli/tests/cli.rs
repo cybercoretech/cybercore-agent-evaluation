@@ -624,7 +624,7 @@ fn model_judge_specs_are_validated() {
 
 /// A one-request-at-a-time mock of the Messages API that judges by keyword,
 /// so the whole CLI path runs with nothing leaving the machine.
-fn mock_judge_api() -> String {
+fn mock_judge_api(pass_keyword: &'static str) -> String {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -650,7 +650,7 @@ fn mock_judge_api() -> String {
                 .as_str()
                 .unwrap_or("")
                 .to_string();
-            let verdict = if prompt.contains("hello from the sandbox") {
+            let verdict = if prompt.contains(pass_keyword) {
                 "pass"
             } else {
                 "fail"
@@ -677,7 +677,7 @@ fn model_judge_verdicts_flow_through_a_real_run() {
     let dir = TempDir::new("judge-run");
     let file = dir.file("eval.json", &load_example("model-judge.json"));
     let store = dir.0.join("store");
-    let api = mock_judge_api();
+    let api = mock_judge_api("hello from the sandbox");
     let output = Command::new(BIN)
         .args([
             "run",
@@ -718,4 +718,127 @@ fn model_judge_verdicts_flow_through_a_real_run() {
     // The mock passes the greeting and fails the numbers trial.
     assert_eq!(outcome(0), "pass");
     assert_eq!(outcome(1), "fail");
+}
+
+#[test]
+fn composite_specs_are_validated() {
+    let dir = TempDir::new("composite-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "duplicate criterion",
+            Box::new(|v| {
+                v["verifier"]["verifiers"][1]["criteria"]["TRIAL-GOOD-REPORT"][0]["criterion_id"] =
+                    "report-written".into();
+            }),
+            "verifier.verifiers[0] and verifier.verifiers[1] both judge criterion \"report-written\" for trial TRIAL-GOOD-REPORT",
+        ),
+        (
+            "sub-verifier error path",
+            Box::new(|v| {
+                v["verifier"]["verifiers"][1]["consent_to_send_outputs"] = false.into();
+            }),
+            "verifier.verifiers[1].consent_to_send_outputs must be true",
+        ),
+        (
+            "nested composite",
+            Box::new(|v| {
+                let inner = v["verifier"].clone();
+                v["verifier"]["verifiers"][1] = inner;
+            }),
+            "verifier.verifiers[1]: a composite verifier cannot contain another composite",
+        ),
+        (
+            "empty composite",
+            Box::new(|v| {
+                v["verifier"]["verifiers"] = serde_json::json!([]);
+            }),
+            "verifier.verifiers must list at least one verifier",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("composite-report.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{}.json", name.replace(' ', "-")), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let message = stderr(&output);
+        assert!(
+            message.contains(expected),
+            "{name}: expected {expected:?} in {message}"
+        );
+    }
+    let file = dir.file("ok.json", &load_example("composite-report.json"));
+    let plan = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--dry-run",
+            "--store",
+            dir.0.join("s").to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(stdout(&plan)
+        .contains("composite of checks (deterministic) + model_judge (claude-opus-5-5"));
+}
+
+/// Exact checks and a (mocked) model judge in one real sandboxed run.
+#[test]
+fn composite_verdicts_flow_through_a_real_run() {
+    let dir = TempDir::new("composite-run");
+    let file = dir.file("eval.json", &load_example("composite-report.json"));
+    let store = dir.0.join("store");
+    let api = mock_judge_api("total: 3");
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ])
+        .env_remove("WORKBENCH_STORE")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env("ANTHROPIC_BASE_URL", &api)
+        .env("ANTHROPIC_API_KEY", "test-key-for-local-mock")
+        .output()
+        .unwrap();
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status = workbench(
+        &["status", "EVAL-COMPOSITE-REPORT", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let report: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let run = |i: usize| {
+        let r = &report["trials"][i]["runs"][0];
+        (
+            r["verification_state"].as_str().unwrap().to_string(),
+            r["run_outcome"].as_str().unwrap().to_string(),
+        )
+    };
+    // Good report: every exact check and the judged clarity criterion pass.
+    assert_eq!(run(0), ("verified_pass".into(), "pass".into()));
+    // Sloppy report: the mandatory exact check fails; the judge has no file
+    // at out/report.txt to read (unavailable), so the state is mixed.
+    assert_eq!(run(1), ("mixed".into(), "fail".into()));
 }

@@ -127,7 +127,45 @@ pub trait Verifier {
     ) -> Pin<Box<dyn Future<Output = Vec<CriterionVerdict>> + 'a>> {
         Box::pin(std::future::ready(self.verify(input)))
     }
+
+    /// Whether this verifier has anything configured for a trial. A
+    /// [`CompositeVerifier`](crate::CompositeVerifier) consults only the
+    /// verifiers that cover the trial. Defaults to `true`.
+    fn covers(&self, trial_id: &str) -> bool {
+        let _ = trial_id;
+        true
+    }
+
+    /// Verdicts paired with the identity of the verifier that produced each
+    /// one (what the recorder writes on every `verification_result`). The
+    /// default attributes all verdicts to [`Verifier::identity`].
+    fn verify_attributed(&self, input: &VerificationInput<'_>) -> Vec<AttributedVerdict> {
+        let identity = self.identity();
+        self.verify(input)
+            .into_iter()
+            .map(|verdict| (identity.clone(), verdict))
+            .collect()
+    }
+
+    /// Asynchronous [`Verifier::verify_attributed`], built on
+    /// [`Verifier::verify_async`] by default.
+    fn verify_attributed_async<'a>(
+        &'a self,
+        input: &'a VerificationInput<'a>,
+    ) -> Pin<Box<dyn Future<Output = Vec<AttributedVerdict>> + 'a>> {
+        Box::pin(async move {
+            let identity = self.identity();
+            self.verify_async(input)
+                .await
+                .into_iter()
+                .map(|verdict| (identity.clone(), verdict))
+                .collect()
+        })
+    }
 }
+
+/// A verdict and the identity of the verifier that produced it.
+pub type AttributedVerdict = (VerifierIdentity, CriterionVerdict);
 
 /// Deterministic verifier: the runner's captured `stdout` must equal the
 /// expected text for the trial. Trials without an expectation are reported
@@ -150,6 +188,10 @@ impl Verifier for StdoutEqualsVerifier {
             version: env!("CARGO_PKG_VERSION").into(),
             verifier_type: VerifierType::Deterministic,
         }
+    }
+
+    fn covers(&self, trial_id: &str) -> bool {
+        self.expected.contains_key(trial_id)
     }
 
     fn verify(&self, input: &VerificationInput<'_>) -> Vec<CriterionVerdict> {
@@ -264,7 +306,7 @@ pub(crate) struct CompletedAttempt<'a> {
     pub(crate) result: &'a Result<RunnerResult, RunnerError>,
     pub(crate) reserved_at: &'a str,
     /// Verdicts already produced (asynchronously) for a finished execution.
-    pub(crate) verdicts: Option<&'a [CriterionVerdict]>,
+    pub(crate) verdicts: Option<&'a [AttributedVerdict]>,
 }
 
 /// Everything needed to describe one resolved attempt.
@@ -279,7 +321,7 @@ struct ResolvedAttempt<'a> {
     reserved_at: &'a str,
     completed_at: &'a str,
     /// Verdicts produced before recording; `None` means verify now.
-    verdicts: Option<&'a [CriterionVerdict]>,
+    verdicts: Option<&'a [AttributedVerdict]>,
 }
 
 impl LocalStore {
@@ -578,10 +620,9 @@ impl LocalStore {
             (AttemptStatus::Finished, Ok(r)) if r.disposition == ExecutionDisposition::Finished
         );
         if let (true, Ok(result)) = (finished, attempt.result) {
-            let identity = verifier.identity();
             let verdicts = match attempt.verdicts {
                 Some(verdicts) => verdicts.to_vec(),
-                None => verifier.verify(&VerificationInput {
+                None => verifier.verify_attributed(&VerificationInput {
                     trial: attempt.trial,
                     run_ref,
                     result,
@@ -599,7 +640,7 @@ impl LocalStore {
                 })
                 .unwrap_or_default();
             let performed_at = now();
-            for verdict in verdicts {
+            for (identity, verdict) in verdicts {
                 // Cite what the verdict inspected: its files' evidence, else
                 // the stdout evidence, else the run's terminal event.
                 let mut cited: Vec<Value> = verdict

@@ -1,8 +1,10 @@
 //! `workbench`: run and inspect local CyberCore agent evaluations.
 //!
-//! Local only: no network listener, no remote store, no credentials. It
-//! drives the implemented and tested services (store, durable scheduler, run
-//! records, Bubblewrap runner) and nothing else.
+//! Local only: no network listener and no remote store. Trials get network
+//! access or credentials only through an explicit Podman `runner.egress`
+//! allowlist (ADR-0019). It drives the implemented and tested services
+//! (store, durable scheduler, run records, runners, verifiers) and nothing
+//! else.
 
 mod evaluation_file;
 
@@ -453,7 +455,20 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
         } else {
             ""
         };
-        say!("  {id:<24} executable={executable}{collects}{note}");
+        let network = match &trial.network_policy {
+            cybercore_evaluation_core::NetworkPolicy::DenyAll => String::new(),
+            cybercore_evaluation_core::NetworkPolicy::Allowlist { hosts } => {
+                format!(" network={}", hosts.join(","))
+            }
+        };
+        let credentials = trial.task_input["credentials"]
+            .as_array()
+            .map(|names| {
+                let names: Vec<&str> = names.iter().filter_map(|n| n.as_str()).collect();
+                format!(" credentials={}", names.join(","))
+            })
+            .unwrap_or_default();
+        say!("  {id:<24} executable={executable}{collects}{network}{credentials}{note}");
     }
     Ok(())
 }

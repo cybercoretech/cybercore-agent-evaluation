@@ -1,0 +1,11 @@
+[package]
+name = "cybercore-egress-forwarder"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "In-sandbox TCP-to-Unix-socket forwarder for the Workbench egress proxy (ADR-0019). Standard library only, so it can be linked statically and run in any image."
+
+[[bin]]
+name = "cybercore-egress-forwarder"
+path = "src/main.rs"

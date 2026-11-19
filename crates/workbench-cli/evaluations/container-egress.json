@@ -1,0 +1,235 @@
+{
+  "format": "cybercore-workbench-evaluation/v0",
+  "schedule": {
+    "evaluation_ref": {
+      "record_id": "EVAL-CONTAINER-EGRESS",
+      "record_type": "evaluation"
+    },
+    "plan_ref": {
+      "record_id": "PLAN-CONTAINER-EGRESS",
+      "record_type": "evaluation_plan"
+    },
+    "max_active_runs": 2,
+    "retry_policy": {
+      "max_attempts_per_trial": 2,
+      "retry_retryable_runner_errors": true,
+      "retryable_execution_failure_codes": [],
+      "retry_timeouts": false
+    },
+    "trials": [
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-REACH-ALLOWED-HOST",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-EGRESS-BOUNDARY",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "bash",
+          "args": [
+            "-c",
+            "exec 3<>/dev/tcp/127.0.0.1/3128\nprintf 'CONNECT api.anthropic.com:443 HTTP/1.1\\r\\n\\r\\n' >&3\nIFS= read -r line <&3; echo \"allowed:${line%$'\\r'}\"\nIFS= read -r line <&3\nprintf \"$HELLO\" >&3\nif IFS= read -r -t 5 -n 1 -d '' reply <&3; then echo upstream-replied; fi\nexec 3>&-\nexec 4<>/dev/tcp/127.0.0.1/3128\nprintf 'CONNECT example.com:443 HTTP/1.1\\r\\n\\r\\n' >&4\nIFS= read -r line <&4; echo \"denied:${line%$'\\r'}\"\nexec 4>&-\nif (exec 5<>/dev/tcp/1.1.1.1/443) 2>/dev/null; then echo direct:open; else echo direct:blocked; fi\n[ -n \"$ANTHROPIC_API_KEY\" ] && echo key-present\necho done"
+          ],
+          "environment": {
+            "HELLO": "\\x16\\x03\\x01\\x00\\x4d\\x01\\x00\\x00\\x49\\x03\\x03\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x07\\x00\\x00\\x06\\xc0\\x2f\\xc0\\x2b\\x13\\x01\\x01\\x00\\x00\\x1a\\x00\\x00\\x00\\x16\\x00\\x14\\x00\\x00\\x11\\x61\\x70\\x69\\x2e\\x61\\x6e\\x74\\x68\\x72\\x6f\\x70\\x69\\x63\\x2e\\x63\\x6f\\x6d"
+          },
+          "credentials": [
+            "ANTHROPIC_API_KEY"
+          ]
+        },
+        "budget": {
+          "max_wall_time_ms": 20000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 0,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "allowlist",
+          "hosts": [
+            "api.anthropic.com"
+          ]
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      }
+    ]
+  },
+  "runner": {
+    "type": "podman",
+    "images": {
+      "ubuntu": "docker.io/library/ubuntu:22.04"
+    },
+    "allowed_executables": {
+      "bash": "/bin/bash"
+    },
+    "limits": {
+      "max_wall_time_ms": 30000,
+      "max_output_bytes": 4096,
+      "max_workspace_bytes": 16777216,
+      "max_tmp_bytes": 8388608,
+      "max_artifact_bytes": 65536,
+      "max_output_files": 16
+    },
+    "resources": {
+      "memory_bytes": 67108864,
+      "cpu_millis": 500,
+      "pids_limit": 64
+    },
+    "allowed_environment_keys": [
+      "HELLO"
+    ],
+    "egress": {
+      "ports": [
+        443
+      ],
+      "max_connections": 16,
+      "max_bytes": 1048576,
+      "credentials": {
+        "ANTHROPIC_API_KEY": {
+          "from_env": "ANTHROPIC_API_KEY"
+        }
+      }
+    }
+  },
+  "verifier": {
+    "type": "checks",
+    "checks": {
+      "TRIAL-REACH-ALLOWED-HOST": [
+        {
+          "criterion_id": "tunnel-opens",
+          "kind": "stdout_contains",
+          "text": "allowed:HTTP/1.1 200"
+        },
+        {
+          "criterion_id": "tls-reaches-host",
+          "kind": "stdout_contains",
+          "text": "upstream-replied"
+        },
+        {
+          "criterion_id": "other-hosts-refused",
+          "kind": "stdout_contains",
+          "text": "denied:HTTP/1.1 403"
+        },
+        {
+          "criterion_id": "no-direct-network",
+          "kind": "stdout_contains",
+          "text": "direct:blocked"
+        },
+        {
+          "criterion_id": "credential-granted",
+          "kind": "stdout_contains",
+          "text": "key-present"
+        }
+      ]
+    }
+  },
+  "project_ref": {
+    "record_id": "PROJECT-LOCAL",
+    "record_type": "project"
+  },
+  "store_output_evidence": true,
+  "task_revisions": [
+    {
+      "record_id": "TASK-EGRESS-BOUNDARY",
+      "record_type": "task_revision",
+      "schema_version": "0.1.0",
+      "created_at": "2026-11-18T00:00:00Z",
+      "provenance": {
+        "source": {
+          "system": "workbench-example",
+          "component": "container-egress.json",
+          "component_version": "0.1.0",
+          "origin_id": "container-egress"
+        },
+        "captured_by": "workbench-example",
+        "capture_version": "0.1.0"
+      },
+      "benchmark_ref": {
+        "record_id": "BENCH-CAT-SMOKE",
+        "record_type": "benchmark_revision"
+      },
+      "task_key": "egress-boundary",
+      "revision": 1,
+      "validity_state": "valid",
+      "task_family": "sandbox_smoke",
+      "objective": "Show that only the allowlisted host is reachable and the granted credential is available.",
+      "agent_instruction": "Reach api.anthropic.com through the proxy; do not print the credential.",
+      "inputs": [],
+      "permitted_tools": [
+        "bash"
+      ],
+      "permitted_effects": [
+        "network:api.anthropic.com"
+      ],
+      "constraints": [
+        "Network access only to api.anthropic.com:443 through the egress proxy."
+      ],
+      "acceptance_criteria": [
+        {
+          "criterion_id": "tunnel-opens",
+          "description": "The allowlisted host's tunnel opens.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        },
+        {
+          "criterion_id": "tls-reaches-host",
+          "description": "A TLS hello reaches the allowlisted host and it answers.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        },
+        {
+          "criterion_id": "other-hosts-refused",
+          "description": "A host that is not allowlisted is refused.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        },
+        {
+          "criterion_id": "no-direct-network",
+          "description": "Direct connections without the proxy fail.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        },
+        {
+          "criterion_id": "credential-granted",
+          "description": "The granted credential is present in the environment.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        }
+      ],
+      "prohibited_outcomes": [
+        "The credential appears in any output."
+      ],
+      "invariants": [
+        "No connection to a host outside the allowlist succeeds."
+      ],
+      "verification_plan": {
+        "required_criterion_ids": [
+          "tunnel-opens",
+          "tls-reaches-host",
+          "other-hosts-refused",
+          "no-direct-network",
+          "credential-granted"
+        ],
+        "verifier_refs": [
+          {
+            "record_id": "VERIFIER-STDOUT-EQUALS",
+            "record_type": "verifier"
+          }
+        ],
+        "independent_verification_required": true
+      },
+      "difficulty_stratum": "low",
+      "risk_stratum": "low"
+    }
+  ]
+}

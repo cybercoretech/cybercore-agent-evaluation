@@ -10,6 +10,7 @@
 //! from a paused (frozen) container; the container is always stopped and
 //! removed.
 
+use crate::egress::{valid_host_name, EgressLog, EgressPolicy, EgressProxy};
 use crate::local_process::{
     collect_process_output, create_temporary_directory, invalid, is_reserved_environment_name,
     runner_error, unavailable, valid_environment_name, valid_logical_id,
@@ -23,17 +24,18 @@ use crate::runner::{
     ResourceUsage, Runner, RunnerCapabilities, RunnerDescriptor, RunnerError, RunnerErrorKind,
     RunnerEvent, RunnerFailure, RunnerFuture, RunnerResult, RunnerType, SideEffectPolicy,
 };
-use crate::workspace_outputs::{artifact_staging_dir, collect_outputs_into};
+use crate::workspace_outputs::{artifact_staging_dir, collect_outputs_into, CollectedOutputs};
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, Stdio};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
@@ -41,6 +43,17 @@ use tokio::process::Command;
 const WORKSPACE: &str = "/workspace";
 const OUTPUTS: &str = "/workspace/output";
 const PODMAN_STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const EGRESS_DIR: &str = "/run/cybercore-egress";
+const EGRESS_SOCKET: &str = "/run/cybercore-egress/proxy.sock";
+const FORWARDER: &str = "/run/cybercore-egress-forwarder";
+const FORWARDER_LISTEN: &str = "127.0.0.1:3128";
+const PROXY_URL: &str = "http://127.0.0.1:3128";
+/// `sun_path` holds 108 bytes including the terminating NUL.
+const MAX_SOCKET_PATH: usize = 107;
+/// Upper bound of `/<egress dir name>/proxy.sock` appended to the socket root.
+const SOCKET_SUFFIX_BOUND: usize = 1 + 34 + 11;
+static EGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const PROXY_VARIABLES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 /// Extra lifetime for the container's own `sleep`, beyond the task budget, so
 /// an orphaned container (runner crash) still stops and removes itself.
 const SELF_EXPIRY_MARGIN_SECS: u64 = 120;
@@ -81,6 +94,41 @@ pub struct ContainerRunnerConfig {
     pub max_output_files: usize,
 }
 
+/// Allowlisted network access for container runs (ADR-0019). The container
+/// keeps `--network none`; its only way out is the host egress proxy, reached
+/// through a Unix socket and the in-container forwarder.
+pub struct ContainerEgressConfig {
+    /// Host path of a *statically linked* `cybercore-egress-forwarder`.
+    pub forwarder_path: PathBuf,
+    /// Destination ports the proxy may tunnel to (usually just 443).
+    pub ports: BTreeSet<u16>,
+    /// Connection attempts per run, allowed or denied.
+    pub max_connections: usize,
+    /// Bytes per run, both directions, all connections.
+    pub max_bytes: u64,
+    /// Permit names that resolve to loopback/private addresses (tests only).
+    pub allow_private_destinations: bool,
+    /// Container environment name → secret value. A trial receives only the
+    /// names it lists in `task_input.credentials`.
+    pub credentials: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for ContainerEgressConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContainerEgressConfig")
+            .field("forwarder_path", &self.forwarder_path)
+            .field("ports", &self.ports)
+            .field("max_connections", &self.max_connections)
+            .field("max_bytes", &self.max_bytes)
+            .field(
+                "allow_private_destinations",
+                &self.allow_private_destinations,
+            )
+            .field("credentials", &self.credentials.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 /// `task_input` contract for the container runner.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +148,10 @@ pub struct ContainerTaskInput {
     /// `max_artifact_bytes`, and collect the regular files left there.
     #[serde(default)]
     pub collect_outputs: bool,
+    /// Granted credentials to expose as environment variables. Allowed only
+    /// with an allowlist network policy on a runner with egress configured.
+    #[serde(default)]
+    pub credentials: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +179,8 @@ pub struct ContainerRunner {
     max_argument_bytes: u64,
     artifact_root: Option<PathBuf>,
     max_output_files: usize,
+    egress: Option<ContainerEgressConfig>,
+    egress_socket_root: PathBuf,
 }
 
 impl ContainerRunner {
@@ -285,7 +339,83 @@ impl ContainerRunner {
             max_argument_bytes: config.max_argument_bytes,
             artifact_root,
             max_output_files: config.max_output_files,
+            egress: None,
+            egress_socket_root: PathBuf::new(),
         })
+    }
+
+    /// Enables allowlisted network access through the host egress proxy.
+    pub fn with_egress(mut self, config: ContainerEgressConfig) -> Result<Self, RunnerError> {
+        let path = config.forwarder_path.to_string_lossy();
+        if !config.forwarder_path.is_absolute() || path.contains([':', ',', '\0']) {
+            return Err(invalid(
+                "egress forwarder_path must be absolute and contain no ':' or ','",
+            ));
+        }
+        let binary = fs::read(&config.forwarder_path)
+            .map_err(|_| invalid("egress forwarder_path could not be read"))?;
+        if !is_static_elf(&binary) {
+            return Err(invalid(
+                "the egress forwarder must be a statically linked Linux executable; build it with RUSTFLAGS='-C target-feature=+crt-static' cargo build --release -p cybercore-egress-forwarder --target x86_64-unknown-linux-gnu",
+            ));
+        }
+        if config.ports.is_empty() || config.ports.contains(&0) {
+            return Err(invalid("egress ports must list at least one non-zero port"));
+        }
+        if !(1..=1024).contains(&config.max_connections) {
+            return Err(invalid("egress max_connections must be between 1 and 1024"));
+        }
+        if config.max_bytes == 0 || config.max_bytes > 1024 * 1024 * 1024 {
+            return Err(invalid("egress max_bytes must be between 1 byte and 1 GiB"));
+        }
+        if self
+            .allowed_environment_keys
+            .iter()
+            .any(|k| is_proxy_variable(k))
+        {
+            return Err(invalid(
+                "proxy variables are set by the runner and cannot be allowlisted",
+            ));
+        }
+        for (name, value) in &config.credentials {
+            if !valid_environment_name(name)
+                || is_reserved_environment_name(name)
+                || is_proxy_variable(name)
+                || self.allowed_environment_keys.contains(name)
+            {
+                return Err(invalid(format!(
+                    "credential name {name} is invalid, reserved, or also an allowlisted environment key"
+                )));
+            }
+            if value.len() < 8 || value.contains(['\0', '\n']) {
+                return Err(invalid(format!(
+                    "credential {name} must be at least 8 bytes with no NUL or newline"
+                )));
+            }
+        }
+        // Unix socket paths are short, so prefer the per-user runtime dir.
+        let socket_root = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+            Some(runtime) if runtime.is_absolute() && runtime.is_dir() => {
+                let root = runtime.join("cybercore-egress");
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(&root)
+                    .map_err(|_| invalid("the egress socket directory could not be created"))?;
+                root
+            }
+            _ => self.temporary_root.clone(),
+        };
+        if socket_root.as_os_str().len() + SOCKET_SUFFIX_BOUND > MAX_SOCKET_PATH {
+            return Err(invalid(format!(
+                "the egress socket directory {} is too long for a Unix socket path; set XDG_RUNTIME_DIR or use a shorter temporary_root",
+                socket_root.display()
+            )));
+        }
+        self.egress_socket_root = socket_root;
+        self.capabilities.supports_network_allowlist = true;
+        self.egress = Some(config);
+        Ok(self)
     }
 
     fn parse_task_input(
@@ -331,6 +461,18 @@ impl ContainerRunner {
                 return Err(invalid(
                     "task_input requested an environment variable that is not allowlisted",
                 ));
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for name in &task.credentials {
+            let granted = self
+                .egress
+                .as_ref()
+                .is_some_and(|e| e.credentials.contains_key(name));
+            if !granted || !seen.insert(name) {
+                return Err(invalid(format!(
+                    "task_input credential {name} is not granted to this runner (or is listed twice)"
+                )));
             }
         }
         if task.collect_outputs {
@@ -394,16 +536,46 @@ impl ContainerRunner {
             self.capabilities.max_wall_time_ms.unwrap_or(0),
             self.capabilities.max_output_bytes.unwrap_or(0),
         )?;
-        if request.network_policy != NetworkPolicy::DenyAll
-            || request.side_effect_policy != SideEffectPolicy::DenyAll
-        {
+        if request.side_effect_policy != SideEffectPolicy::DenyAll {
             return Err(runner_error(
                 RunnerErrorKind::UnsupportedPolicy,
                 false,
-                "the container runner supports deny-all network and side-effect policies only",
+                "the container runner supports the deny-all side-effect policy only",
             ));
         }
+        let allowlist = match (&request.network_policy, &self.egress) {
+            (NetworkPolicy::DenyAll, _) => None,
+            (NetworkPolicy::Allowlist { hosts }, Some(egress)) => {
+                if hosts.is_empty() || !hosts.iter().all(|h| valid_host_name(h)) {
+                    return Err(invalid(
+                        "network allowlist hosts must be exact DNS names (no IP addresses, ports or wildcards)",
+                    ));
+                }
+                Some((hosts.clone(), egress))
+            }
+            (NetworkPolicy::Allowlist { .. }, None) => {
+                return Err(runner_error(
+                    RunnerErrorKind::UnsupportedPolicy,
+                    false,
+                    "network allowlists need a container runner configured with egress",
+                ));
+            }
+        };
         let task = self.parse_task_input(request)?;
+        if !task.credentials.is_empty() && allowlist.is_none() {
+            return Err(invalid(
+                "task_input credentials require an allowlist network policy",
+            ));
+        }
+        let secrets: Vec<(&str, &str)> = match &allowlist {
+            Some((_, egress)) => task
+                .credentials
+                .iter()
+                .filter_map(|n| egress.credentials.get_key_value(n))
+                .map(|(n, v)| (n.as_str(), v.as_str()))
+                .collect(),
+            None => Vec::new(),
+        };
         let image = self.image(&task)?.clone();
         let executable = self
             .allowed_executables
@@ -428,6 +600,34 @@ impl ContainerRunner {
             &task.files,
             self.max_input_file_bytes,
         )?;
+
+        let egress_directory = match &allowlist {
+            Some(_) => Some(EgressDirectory::create(&self.egress_socket_root)?),
+            None => None,
+        };
+        let proxy = match (&allowlist, &egress_directory) {
+            (Some((hosts, egress)), Some(directory)) => Some(
+                EgressProxy::start(
+                    &directory.socket(),
+                    EgressPolicy {
+                        hosts: hosts.iter().cloned().collect(),
+                        ports: egress.ports.clone(),
+                        allow_private_destinations: egress.allow_private_destinations,
+                        max_connections: egress.max_connections,
+                        max_bytes: egress.max_bytes,
+                    },
+                )
+                .map_err(|_| unavailable("could not start the egress proxy"))?,
+            ),
+            _ => None,
+        };
+        let egress_mounts: Vec<String> = match (&allowlist, &egress_directory) {
+            (Some((_, egress)), Some(directory)) => vec![
+                format!("{}:{EGRESS_DIR}:ro", directory.path.display()),
+                format!("{}:{FORWARDER}:ro", egress.forwarder_path.display()),
+            ],
+            _ => Vec::new(),
+        };
 
         let name = container_name(&request.request_id);
         let mut guard = ContainerGuard::new(&self.podman, &name);
@@ -480,6 +680,9 @@ impl ContainerRunner {
         if staging.is_some() {
             run.extend(["--tmpfs", &outputs]);
         }
+        for mount in &egress_mounts {
+            run.extend(["-v", mount]);
+        }
         run.extend([
             "-v",
             &input_mount,
@@ -508,8 +711,29 @@ impl ContainerRunner {
         for (key, value) in &task.environment {
             exec.arg("--env").arg(format!("{key}={value}"));
         }
-        exec.arg(&name)
-            .arg(&executable)
+        if proxy.is_some() {
+            for variable in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+                exec.arg("--env").arg(format!("{variable}={PROXY_URL}"));
+                let lower = variable.to_ascii_lowercase();
+                exec.arg("--env").arg(format!("{lower}={PROXY_URL}"));
+            }
+            // A name without a value makes podman copy it from its own
+            // environment, so secrets never appear in any argument list.
+            for (credential, value) in &secrets {
+                exec.arg("--env").arg(credential).env(credential, value);
+            }
+        }
+        exec.arg(&name);
+        if proxy.is_some() {
+            exec.arg(FORWARDER).args([
+                "--listen",
+                FORWARDER_LISTEN,
+                "--socket",
+                EGRESS_SOCKET,
+                "--",
+            ]);
+        }
+        exec.arg(&executable)
             .args(&task.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -616,6 +840,10 @@ impl ContainerRunner {
                         "discarded_over_limit".to_string()
                     }
                     Ok(collected) => {
+                        let collected = drop_files_containing(&partial, collected, &secrets)
+                            .map_err(|_| {
+                                unavailable("could not scan collected outputs for credentials")
+                            })?;
                         fs::rename(&partial, published).map_err(|_| {
                             unavailable("could not publish collected workspace outputs")
                         })?;
@@ -648,11 +876,34 @@ impl ContainerRunner {
         };
 
         guard.stop().await;
+        let egress_log: Option<EgressLog> = proxy.map(EgressProxy::stop);
+        drop(egress_directory);
         drop(input_directory);
 
         let ended_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        let stdout_text = String::from_utf8_lossy(&stdout_capture.bytes).into_owned();
-        let stderr_text = String::from_utf8_lossy(&stderr_capture.bytes).into_owned();
+        let stdout_text = redact(
+            String::from_utf8_lossy(&stdout_capture.bytes).into_owned(),
+            &secrets,
+        );
+        let stderr_text = redact(
+            String::from_utf8_lossy(&stderr_capture.bytes).into_owned(),
+            &secrets,
+        );
+        let (egress_allowed, egress_denied) = egress_log.as_ref().map_or((0, 0), |log| {
+            let allowed = log.events.iter().filter(|e| e.allowed).count();
+            (allowed, log.events.len() - allowed)
+        });
+        let network = match (&allowlist, &egress_log) {
+            (Some((hosts, _)), Some(log)) => json!({
+                "policy": "allowlist",
+                "hosts": hosts,
+                "enforcement": "host_egress_proxy_tls_sni",
+                "egress": log.events,
+                "refused_over_limit": log.refused_over_limit,
+                "credentials_granted": task.credentials,
+            }),
+            _ => json!({"policy": "deny_all"}),
+        };
         let output_truncated = stdout_capture.truncated || stderr_capture.truncated;
         let output_bytes = (stdout_capture.bytes.len() + stderr_capture.bytes.len()) as u64;
         let output = json!({
@@ -663,7 +914,8 @@ impl ContainerRunner {
             "output_encoding": "utf-8-lossy",
             "output_truncated": output_truncated,
             "output_drain_timed_out": drain_timed_out,
-            "stdout_stderr_redaction": "not_implemented",
+            "stdout_stderr_redaction": if secrets.is_empty() { "not_implemented" } else { "granted_credentials" },
+            "network": network,
             "unmeasured_usage_fields": ["input_tokens", "output_tokens", "tool_calls"],
             "workspace_persisted": false,
             "workspace_file_artifact_export": export,
@@ -695,7 +947,7 @@ impl ContainerRunner {
                     occurred_at: ended_at,
                     actor: "container_runner".into(),
                     event_type: event_type.into(),
-                    payload: json!({"exit_code": exit_code, "timed_out": timed_out, "oom_killed": oom_killed}),
+                    payload: json!({"exit_code": exit_code, "timed_out": timed_out, "oom_killed": oom_killed, "egress_allowed": egress_allowed, "egress_denied": egress_denied}),
                 },
             ],
             artifacts,
@@ -745,6 +997,107 @@ fn errored(
 /// The container name used for a request: derived from the request ID's
 /// SHA-256, so arbitrary IDs stay valid and collision-free. Operators can use
 /// it to find a run's container (also labelled `io.cybercore.request=<name>`).
+/// A short-named, owner-only directory holding one run's proxy socket.
+struct EgressDirectory {
+    path: PathBuf,
+}
+
+impl EgressDirectory {
+    fn create(root: &Path) -> Result<Self, RunnerError> {
+        for _ in 0..32 {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos());
+            let sequence = EGRESS_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = root.join(format!("{:x}-{sequence:x}-{nanos:x}", std::process::id()));
+            match fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
+            }
+        }
+        Err(unavailable("could not create the egress socket directory"))
+    }
+
+    fn socket(&self) -> PathBuf {
+        self.path.join("proxy.sock")
+    }
+}
+
+impl Drop for EgressDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.socket());
+        let _ = fs::remove_dir(&self.path);
+    }
+}
+
+fn is_proxy_variable(name: &str) -> bool {
+    PROXY_VARIABLES.contains(&name.to_ascii_uppercase().as_str())
+}
+
+/// True for a 64-bit little-endian ELF with no program interpreter.
+fn is_static_elf(binary: &[u8]) -> bool {
+    let read = |at: usize, len: usize| binary.get(at..at + len);
+    if read(0, 4) != Some(b"\x7fELF") || binary.get(4) != Some(&2) || binary.get(5) != Some(&1) {
+        return false;
+    }
+    let number = |at: usize, len: usize| -> Option<usize> {
+        let bytes = read(at, len)?;
+        Some(
+            bytes
+                .iter()
+                .rev()
+                .fold(0_usize, |acc, b| acc << 8 | usize::from(*b)),
+        )
+    };
+    let (Some(offset), Some(size), Some(count)) =
+        (number(0x20, 8), number(0x36, 2), number(0x38, 2))
+    else {
+        return false;
+    };
+    (0..count).all(|i| number(offset + i * size, 4).is_some_and(|kind| kind != 3))
+}
+
+fn redact(mut text: String, secrets: &[(&str, &str)]) -> String {
+    for (name, value) in secrets {
+        if text.contains(value) {
+            text = text.replace(value, &format!("[REDACTED:{name}]"));
+        }
+    }
+    text
+}
+
+/// Removes collected files that contain a granted credential.
+fn drop_files_containing(
+    directory: &Path,
+    mut collected: CollectedOutputs,
+    secrets: &[(&str, &str)],
+) -> std::io::Result<CollectedOutputs> {
+    if secrets.is_empty() {
+        return Ok(collected);
+    }
+    let mut kept = Vec::new();
+    for file in collected.files {
+        let path = directory.join(&file.path);
+        let bytes = fs::read(&path)?;
+        let leaks = secrets.iter().any(|(_, value)| {
+            let value = value.as_bytes();
+            bytes.windows(value.len()).any(|window| window == value)
+        });
+        if leaks {
+            fs::remove_file(&path)?;
+            collected.total_bytes -= file.byte_length;
+            collected
+                .rejected
+                .push((file.path, "contained a granted credential"));
+        } else {
+            kept.push(file);
+        }
+    }
+    collected.files = kept;
+    Ok(collected)
+}
+
 pub fn container_name(request_id: &str) -> String {
     let digest = Sha256::digest(request_id.as_bytes());
     let hex: String = digest.iter().take(10).map(|b| format!("{b:02x}")).collect();

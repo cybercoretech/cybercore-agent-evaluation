@@ -1,0 +1,230 @@
+{
+  "format": "cybercore-workbench-suite/v0",
+  "suite_id": "REPORTS",
+  "repeats": 2,
+  "runner": {
+    "type": "local_bubblewrap",
+    "allowed_executables": {
+      "sh": "/usr/bin/sh"
+    },
+    "limits": {
+      "max_wall_time_ms": 10000,
+      "max_output_bytes": 4096,
+      "max_artifact_bytes": 65536,
+      "max_output_files": 8
+    }
+  },
+  "defaults": {
+    "collect_outputs": true,
+    "max_active_runs": 2
+  },
+  "agents": [
+    {
+      "agent_id": "CAREFUL",
+      "executable_id": "sh",
+      "args": [
+        "-c",
+        "total=0; while read -r n; do total=$((total + n)); done < /workspace/input/numbers.txt; mkdir -p /workspace/output/out; echo \"$total\" > /workspace/output/out/report.txt; printf '%s' '{\"format\":\"cybercore-usage/v0\",\"models\":[{\"model_id\":\"model-careful\",\"input_tokens\":1800,\"output_tokens\":400}]}' > /workspace/output/cybercore-usage.json; echo done"
+      ]
+    },
+    {
+      "agent_id": "SLOPPY",
+      "executable_id": "sh",
+      "args": [
+        "-c",
+        "mkdir -p /workspace/output/out; wc -l < /workspace/input/numbers.txt | tr -d ' ' > /workspace/output/out/report.txt; printf '%s' '{\"format\":\"cybercore-usage/v0\",\"models\":[{\"model_id\":\"model-sloppy\",\"input_tokens\":600,\"output_tokens\":100}]}' > /workspace/output/cybercore-usage.json; echo done"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "ONES",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "1\n1\n1\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "3\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    },
+    {
+      "task_id": "SMALL",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "1\n2\n3\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "6\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    },
+    {
+      "task_id": "TENS",
+      "family": "arithmetic",
+      "difficulty": "medium",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "10\n20\n30\n40\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "100\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    },
+    {
+      "task_id": "MIXED",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "5\n7\n9\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "21\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    },
+    {
+      "task_id": "BIG",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "100\n250\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "350\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    },
+    {
+      "task_id": "LONG",
+      "family": "arithmetic-long",
+      "difficulty": "medium",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "2\n4\n6\n8\n10\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in /workspace/input/numbers.txt and write the total to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "30\n"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    }
+  ],
+  "pricing": {
+    "currency": "USD",
+    "models": {
+      "model-careful": {
+        "input_per_million_tokens": 3.0,
+        "output_per_million_tokens": 15.0
+      },
+      "model-sloppy": {
+        "input_per_million_tokens": 0.8,
+        "output_per_million_tokens": 4.0
+      }
+    }
+  },
+  "compare": [
+    {
+      "baseline": "SLOPPY",
+      "treatment": "CAREFUL",
+      "alpha": 0.05,
+      "minimum_matched_tasks": 5
+    }
+  ]
+}

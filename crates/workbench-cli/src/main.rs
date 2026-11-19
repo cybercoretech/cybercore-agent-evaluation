@@ -22,6 +22,7 @@ macro_rules! say {
     }};
 }
 
+mod suite;
 mod summary;
 
 use clap::{Parser, Subcommand};
@@ -37,6 +38,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
+use suite::Suite;
 
 const MAX_RECORD_ID: usize = 128;
 
@@ -69,11 +71,26 @@ enum Command {
     /// a crash are rebuilt, and interrupted attempts are recorded and retried
     /// only if the schedule's retry policy allows it.
     Run {
-        /// Evaluation file (format cybercore-workbench-evaluation/v0).
+        /// Evaluation file (cybercore-workbench-evaluation/v0), or a task
+        /// suite (cybercore-workbench-suite/v0), which runs each agent's
+        /// evaluation in turn.
         file: PathBuf,
         /// Validate the file and show the plan without running or writing anything.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Write a task suite's evaluation files, one per agent, without running
+    /// anything.
+    ///
+    /// The files are ordinary evaluation files: `workbench run` on one of
+    /// them does exactly what running the suite does for that agent. Existing
+    /// files are never overwritten unless their content is identical.
+    Expand {
+        /// Task suite (format cybercore-workbench-suite/v0).
+        file: PathBuf,
+        /// Directory to write the evaluation files into (created if needed).
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
     },
     /// Show an evaluation's trials and recorded runs (read-only).
     Status {
@@ -116,6 +133,7 @@ fn main() -> ExitCode {
         Err(message) => Err(message),
         Ok(store) => match cli.command {
             Command::Run { file, dry_run } => run(&store, &file, dry_run),
+            Command::Expand { file, out } => expand(&file, &out),
             Command::Status {
                 evaluation_id,
                 json,
@@ -164,22 +182,105 @@ fn resolve_store(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
 }
 
 fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|error| format!("{}: cannot read: {error}", file.display()))?;
+    if suite::is_suite(&text) {
+        return run_suite(store_dir, file, dry_run);
+    }
     let evaluation = EvaluationFile::load(file)?;
-    let evaluation_id = evaluation.evaluation_id().to_string();
-    // Validates the schedule exactly as the scheduler will.
-    cybercore_evaluation_core::TrialCoordinator::new(evaluation.schedule.clone())
-        .map_err(|error| format!("{}: schedule: {error}", file.display()))?;
-    check_identity_lengths(&evaluation.schedule)?;
+    let origin = file.display().to_string();
+    prepare(&evaluation, &origin)?;
+    run_evaluation(store_dir, &evaluation, dry_run)
+}
 
+/// Checks an evaluation exactly as the scheduler and the store will.
+fn prepare(evaluation: &EvaluationFile, origin: &str) -> Result<(), String> {
+    cybercore_evaluation_core::TrialCoordinator::new(evaluation.schedule.clone())
+        .map_err(|error| format!("{origin}: schedule: {error}"))?;
+    check_identity_lengths(&evaluation.schedule)?;
     let validator = ContractValidator::embedded().map_err(|e| e.to_string())?;
     for (index, record) in evaluation.task_revisions.iter().enumerate() {
         validator
             .validate(record)
-            .map_err(|e| format!("{}: task_revisions[{index}]: {e}", file.display()))?;
+            .map_err(|e| format!("{origin}: task_revisions[{index}]: {e}"))?;
     }
+    Ok(())
+}
 
+/// A suite's expanded evaluations, each checked like a hand-written file.
+fn expand_suite(file: &Path) -> Result<(Suite, Vec<EvaluationFile>), String> {
+    let suite = Suite::load(file)?;
+    let mut evaluations = Vec::new();
+    for expanded in suite.expand() {
+        let origin = format!("{} (expanded {})", file.display(), expanded.evaluation_id);
+        let evaluation = EvaluationFile::from_value(expanded.file, &origin)?;
+        prepare(&evaluation, &origin)?;
+        evaluations.push(evaluation);
+    }
+    Ok((suite, evaluations))
+}
+
+/// Runs every agent's evaluation in the order the suite lists them. All of
+/// them are checked before the first one runs.
+fn run_suite(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
+    let (suite, evaluations) = expand_suite(file)?;
+    let ids: Vec<&str> = evaluations.iter().map(|e| e.evaluation_id()).collect();
+    say!(
+        "suite {}: {} agent(s) × {} task(s) × {} repeat(s) → {}",
+        suite.suite_id,
+        suite.agents.len(),
+        suite.tasks.len(),
+        suite.repeats,
+        ids.join(", ")
+    );
+    for evaluation in &evaluations {
+        say!("");
+        run_evaluation(store_dir, evaluation, dry_run)?;
+    }
+    if !suite.compare.is_empty() {
+        say!("");
+        for c in &suite.compare {
+            say!(
+                "compare with: workbench compare {} {}",
+                suite.evaluation_id(&c.baseline),
+                suite.evaluation_id(&c.treatment)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn expand(file: &Path, out: &Path) -> Result<(), String> {
+    let (suite, _) = expand_suite(file)?;
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    for expanded in suite.expand() {
+        let path = out.join(format!("{}.json", expanded.evaluation_id));
+        let text = serde_json::to_string_pretty(&expanded.file).map_err(|e| e.to_string())? + "\n";
+        match std::fs::read_to_string(&path) {
+            Ok(existing) if existing == text => say!("unchanged {}", path.display()),
+            Ok(_) => {
+                return Err(format!(
+                    "{} already exists with different content; remove it or choose another --out",
+                    path.display()
+                ))
+            }
+            Err(_) => {
+                std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+                say!("wrote {}", path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_evaluation(
+    store_dir: &Path,
+    evaluation: &EvaluationFile,
+    dry_run: bool,
+) -> Result<(), String> {
+    let evaluation_id = evaluation.evaluation_id().to_string();
     if dry_run {
-        return print_plan(store_dir, &evaluation);
+        return print_plan(store_dir, evaluation);
     }
 
     let store = LocalStore::open(store_dir).map_err(|e| format!("{}: {e}", store_dir.display()))?;

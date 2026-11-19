@@ -1580,3 +1580,204 @@ fn pricing_is_validated() {
     );
     assert!(stdout(&plan).contains("cybercore-usage.json (recorded as self-reported)"));
 }
+
+#[test]
+fn suites_run_compare_and_expand() {
+    let dir = TempDir::new("suite");
+    let store = dir.0.join("store");
+    let suite = dir.file("suite.json", &load_example("report-suite.json"));
+    let plan = workbench(
+        &["run", suite.to_str().unwrap(), "--dry-run"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(plan.status.success(), "{}", stderr(&plan));
+    assert!(stdout(&plan).contains(
+        "suite REPORTS: 2 agent(s) × 6 task(s) × 2 repeat(s) → REPORTS-CAREFUL, REPORTS-SLOPPY"
+    ));
+    assert!(!store.exists(), "a dry run writes nothing");
+
+    let output = workbench(
+        &["run", suite.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("froze analysis plan PLAN-REPORTS-CAREFUL"),
+        "{text}"
+    );
+    assert!(text.contains("compare with: workbench compare REPORTS-SLOPPY REPORTS-CAREFUL"));
+
+    let compare = workbench(
+        &["compare", "REPORTS-SLOPPY", "REPORTS-CAREFUL", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(compare.status.success(), "{}", stderr(&compare));
+    let out: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    assert_eq!(out["baseline"]["passes"], 2);
+    assert_eq!(out["treatment"]["passes"], 12);
+    assert_eq!(out["comparison"]["status"], "comparable");
+    assert_eq!(out["comparison"]["matched_tasks"], 6);
+    assert_eq!(out["comparison"]["inferential_status"], "confirmatory");
+    assert_eq!(
+        out["comparison"]["declared_comparison_id"],
+        "CAREFUL-vs-SLOPPY"
+    );
+    assert_eq!(out["speed_and_cost"][2]["status"], "comparable");
+
+    // Running the suite again resumes both evaluations and runs nothing.
+    let again = workbench(
+        &["run", suite.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(stdout(&again).matches("executed 0 attempt(s)").count(), 2);
+
+    // Expanded files are the same evaluations: running one resumes it.
+    let out_dir = dir.0.join("expanded");
+    let expand = workbench(
+        &[
+            "expand",
+            suite.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(expand.status.success(), "{}", stderr(&expand));
+    let expanded = out_dir.join("REPORTS-SLOPPY.json");
+    let resumed = workbench(
+        &["run", expanded.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(
+        stdout(&resumed).contains("resuming REPORTS-SLOPPY"),
+        "{}",
+        stdout(&resumed)
+    );
+    assert!(stdout(&resumed).contains("executed 0 attempt(s)"));
+    // Expanding again leaves identical files alone and refuses to overwrite others.
+    let unchanged = workbench(
+        &[
+            "expand",
+            suite.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(stdout(&unchanged).contains("unchanged"));
+    fs::write(&expanded, "{}").unwrap();
+    let refused = workbench(
+        &[
+            "expand",
+            suite.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("already exists with different content"));
+}
+
+#[test]
+fn suite_specs_are_validated() {
+    let dir = TempDir::new("suite-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "repeats",
+            Box::new(|v| v["repeats"] = 0.into()),
+            "repeats must be between 1 and 100",
+        ),
+        (
+            "agent-dup",
+            Box::new(|v| {
+                let first = v["agents"][0].clone();
+                v["agents"].as_array_mut().unwrap().push(first)
+            }),
+            "agents[CAREFUL] is listed more than once",
+        ),
+        (
+            "task-id",
+            Box::new(|v| v["tasks"][0]["task_id"] = "bad id".into()),
+            "tasks[].task_id must be 1 to 40",
+        ),
+        (
+            "no-criteria",
+            Box::new(|v| v["tasks"][0]["checks"] = serde_json::json!([])),
+            "tasks[ONES] needs at least one entry in checks or judge",
+        ),
+        (
+            "judge-consent",
+            Box::new(|v| {
+                v["tasks"][0]["judge"] = serde_json::json!([{"criterion_id": "j", "rubric": "r"}])
+            }),
+            "tasks[ONES].judge needs the suite's judge settings",
+        ),
+        (
+            "env-clash",
+            Box::new(|v| v["agents"][0]["environment"] = serde_json::json!({"TASK_PROMPT": "x"})),
+            "tasks[ONES].environment.TASK_PROMPT is also set by agents[CAREFUL]",
+        ),
+        (
+            "compare-unknown",
+            Box::new(|v| v["compare"][0]["baseline"] = "NOBODY".into()),
+            "compare[0].baseline \"NOBODY\" is not an agent_id",
+        ),
+        (
+            "credentials",
+            Box::new(|v| v["agents"][0]["credentials"] = serde_json::json!(["KEY"])),
+            "agents[CAREFUL].credentials need agents[CAREFUL].network",
+        ),
+        (
+            "unknown-field",
+            Box::new(|v| v["tasks"][0]["expected"] = "6".into()),
+            "unknown field `expected`",
+        ),
+        // Errors found in the expansion name the expanded evaluation.
+        (
+            "bad-check",
+            Box::new(|v| v["tasks"][0]["checks"][0]["kind"] = "file_matches".into()),
+            "(expanded REPORTS-CAREFUL)",
+        ),
+        (
+            "executable",
+            Box::new(|v| v["agents"][1]["executable_id"] = "python".into()),
+            "(expanded REPORTS-SLOPPY)",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("report-suite.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{name}.json"), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            stderr(&output).contains(expected),
+            "{name}: expected {expected:?} in {}",
+            stderr(&output)
+        );
+    }
+}

@@ -5,7 +5,7 @@ use crate::error::{StoreError, StoreResult};
 use crate::local::LocalStore;
 use crate::metadata::now;
 use crate::recorder::{
-    staged_files, CompletedAttempt, CriterionVerdict, RecordReport, RunRecorderConfig,
+    staged_files, AttributedVerdict, CompletedAttempt, RecordReport, RunRecorderConfig,
     VerificationInput, Verifier,
 };
 use crate::scheduler::DurableScheduler;
@@ -35,7 +35,7 @@ struct Executed {
     result: Result<RunnerResult, RunnerError>,
     /// Verdicts for a finished execution, produced inside this attempt's own
     /// future so a slow verifier never pauses the other attempts.
-    verdicts: Option<Vec<CriterionVerdict>>,
+    verdicts: Option<Vec<AttributedVerdict>>,
 }
 
 type Execution<'a> = Pin<Box<dyn Future<Output = Executed> + 'a>>;
@@ -115,7 +115,7 @@ where
                             result: finished,
                             files: &files,
                         };
-                        Some(verifier.verify_async(&input).await)
+                        Some(verifier.verify_attributed_async(&input).await)
                     }
                     _ => None,
                 };

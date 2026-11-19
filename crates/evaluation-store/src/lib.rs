@@ -18,6 +18,7 @@
 mod artifact;
 mod canonical;
 mod checks;
+mod composite;
 mod contracts;
 mod driver;
 mod embedded_schemas;
@@ -30,6 +31,7 @@ mod scheduler;
 pub use artifact::{ArtifactStore, FsArtifactStore};
 pub use canonical::{canonical_json, sha256_hex};
 pub use checks::{Check, ChecksVerifier, CriterionCheck};
+pub use composite::CompositeVerifier;
 pub use contracts::ContractValidator;
 pub use driver::{run_ready_trials, DriveReport};
 pub use error::{StoreError, StoreResult};

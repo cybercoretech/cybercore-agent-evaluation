@@ -55,6 +55,10 @@ impl Verifier for ChecksVerifier {
         }
     }
 
+    fn covers(&self, trial_id: &str) -> bool {
+        self.checks.get(trial_id).is_some_and(|c| !c.is_empty())
+    }
+
     fn verify(&self, input: &VerificationInput<'_>) -> Vec<CriterionVerdict> {
         let trial_id = &input.trial.trial_ref.record_id;
         let Some(checks) = self.checks.get(trial_id).filter(|c| !c.is_empty()) else {

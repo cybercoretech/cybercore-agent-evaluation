@@ -440,3 +440,153 @@ async fn task_revision_criticality_applies_to_file_criteria() {
     assert_eq!(run["verification_state"], "mixed");
     assert_eq!(run["run_outcome"], "pass");
 }
+
+/// Stands in for a model judge: one fixed verdict for one trial.
+struct FakeJudge {
+    trial: &'static str,
+    criterion: &'static str,
+    result: cybercore_evaluation_store::VerdictResult,
+}
+
+impl cybercore_evaluation_store::Verifier for FakeJudge {
+    fn identity(&self) -> cybercore_evaluation_store::VerifierIdentity {
+        cybercore_evaluation_store::VerifierIdentity {
+            verifier_id: "model-judge:fake".into(),
+            version: "0".into(),
+            verifier_type: cybercore_evaluation_store::VerifierType::ModelJudge,
+        }
+    }
+
+    fn covers(&self, trial_id: &str) -> bool {
+        trial_id == self.trial
+    }
+
+    fn verify(
+        &self,
+        _input: &cybercore_evaluation_store::VerificationInput<'_>,
+    ) -> Vec<cybercore_evaluation_store::CriterionVerdict> {
+        vec![cybercore_evaluation_store::CriterionVerdict {
+            criterion_id: self.criterion.into(),
+            inspected_target: "workspace-output:out/report.txt".into(),
+            method: "fake judgment".into(),
+            result: self.result,
+            limitations: vec!["Model judgment (fake).".into()],
+            judge_rationale: Some("fake rationale".into()),
+            evidence_paths: vec!["out/report.txt".into()],
+        }]
+    }
+}
+
+async fn drive_with(
+    store: &LocalStore,
+    runner: &FileRunner,
+    verifier: &dyn cybercore_evaluation_store::Verifier,
+) {
+    let config = RunRecorderConfig::for_runner(runner, reference("project", "P-1"), true)
+        .with_artifact_root(&runner.artifact_root);
+    let (mut scheduler, _) =
+        DurableScheduler::acquire(store.metadata(), "EVAL-1", "w", LONG).unwrap();
+    run_ready_trials(store, &mut scheduler, runner, &config, verifier, identity)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn checks_and_a_judge_combine_with_their_own_identities() {
+    use cybercore_evaluation_store::{CompositeVerifier, VerdictResult};
+    let dir = Temp::new("composite");
+    let store = LocalStore::open(dir.0.join("store")).unwrap();
+    store.metadata().create_schedule(&schedule()).unwrap();
+    let runner = FileRunner::new(
+        &dir.0.join("artifacts"),
+        "done\n",
+        vec![("out/report.txt", b"total: 3\n")],
+    );
+    let composite = CompositeVerifier::new(vec![
+        Box::new(checks()),
+        Box::new(FakeJudge {
+            trial: "T-1",
+            criterion: "report-is-clear",
+            result: VerdictResult::Pass,
+        }),
+        // Configured for another trial: must add nothing to T-1.
+        Box::new(FakeJudge {
+            trial: "T-OTHER",
+            criterion: "unrelated",
+            result: VerdictResult::Fail,
+        }),
+    ]);
+    drive_with(&store, &runner, &composite).await;
+
+    let exact = get(&store, "RUN-T-1-A1:VERIFY:report-written");
+    assert_eq!(exact["result"], "pass");
+    assert_eq!(exact["verifier"]["verifier_type"], "deterministic");
+    assert_eq!(exact["verifier"]["verifier_id"], "workbench-checks");
+    let judged = get(&store, "RUN-T-1-A1:VERIFY:report-is-clear");
+    assert_eq!(judged["result"], "pass");
+    assert_eq!(judged["verifier"]["verifier_type"], "model_judge");
+    assert_eq!(judged["judge_rationale"], "fake rationale");
+    assert_eq!(
+        judged["evidence_refs"][0]["evidence_id"],
+        "RUN-T-1-A1:FILE:000"
+    );
+    assert!(store
+        .metadata()
+        .get_record("RUN-T-1-A1:VERIFY:unrelated")
+        .unwrap()
+        .is_none());
+    assert!(store
+        .metadata()
+        .get_record("RUN-T-1-A1:VERIFY:no-verifier-configured")
+        .unwrap()
+        .is_none());
+    // 5 checks + 1 judgment.
+    let run = get(&store, "RUN-T-1-A1");
+    assert_eq!(run["verification_refs"].as_array().unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn a_criterion_judged_twice_or_not_at_all_is_never_a_pass() {
+    use cybercore_evaluation_store::{CompositeVerifier, VerdictResult};
+    let dir = Temp::new("composite-conflict");
+    let store = LocalStore::open(dir.0.join("store")).unwrap();
+    store.metadata().create_schedule(&schedule()).unwrap();
+    let runner = FileRunner::new(
+        &dir.0.join("artifacts"),
+        "done\n",
+        vec![("out/report.txt", b"total: 3\n")],
+    );
+    let composite = CompositeVerifier::new(vec![
+        Box::new(checks()),
+        // Same criterion ID as a check: the two verdicts collide.
+        Box::new(FakeJudge {
+            trial: "T-1",
+            criterion: "report-written",
+            result: VerdictResult::Pass,
+        }),
+    ]);
+    drive_with(&store, &runner, &composite).await;
+    let conflict = get(&store, "RUN-T-1-A1:VERIFY:report-written");
+    assert_eq!(conflict["result"], "unavailable");
+    assert_eq!(conflict["verifier"]["verifier_type"], "hybrid");
+    assert!(conflict["limitations"][0]
+        .as_str()
+        .unwrap()
+        .contains("more than one verifier"));
+
+    let dir = Temp::new("composite-uncovered");
+    let store = LocalStore::open(dir.0.join("store")).unwrap();
+    store.metadata().create_schedule(&schedule()).unwrap();
+    let runner = FileRunner::new(&dir.0.join("artifacts"), "done\n", vec![]);
+    let nobody = CompositeVerifier::new(vec![Box::new(FakeJudge {
+        trial: "T-OTHER",
+        criterion: "x",
+        result: VerdictResult::Pass,
+    })]);
+    drive_with(&store, &runner, &nobody).await;
+    assert_eq!(
+        get(&store, "RUN-T-1-A1:VERIFY:no-verifier-configured")["result"],
+        "unavailable"
+    );
+    assert_eq!(get(&store, "RUN-T-1-A1")["run_outcome"], "not_scored");
+}

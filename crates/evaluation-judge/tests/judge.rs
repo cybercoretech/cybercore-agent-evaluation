@@ -236,11 +236,9 @@ fn failures_never_become_a_pass() {
     let files = BTreeMap::from([("report.txt".to_string(), b"hi".to_vec())]);
     let verdicts = judge(config(&url), "out", files.clone());
     assert_eq!(verdicts[0].result, VerdictResult::Unavailable);
-    assert!(verdicts[0].limitations[0].contains("HTTP 429 (rate_limit_error)"));
-    assert!(
-        !verdicts[0].limitations[0].contains("slow down"),
-        "error messages are not echoed"
-    );
+    // The API's own explanation is kept: it is what makes failures actionable
+    // (the real smoke test failed on "credit balance is too low").
+    assert!(verdicts[0].limitations[0].contains("HTTP 429 (rate_limit_error): slow down"));
     assert_eq!(verdicts[1].result, VerdictResult::Inconclusive);
     assert!(verdicts[1]
         .limitations

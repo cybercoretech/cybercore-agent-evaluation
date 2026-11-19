@@ -41,7 +41,25 @@
   "verification_state": "not_started",
   "started_at": "2026-11-17T19:11:00Z",
   "agent_report": {
-    "completion_claim": "no_claim"
+    "completion_claim": "no_claim",
+    "reported_usage": {
+      "source": "agent_self_reported",
+      "report_status": "reported",
+      "input_tokens": 12000,
+      "output_tokens": 3400,
+      "tool_calls": 7,
+      "models": [
+        {
+          "model_id": "claude-sonnet-5-5",
+          "input_tokens": 12000,
+          "output_tokens": 3400
+        }
+      ],
+      "cost_microunits": 87000,
+      "currency": "USD",
+      "pricing_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "unpriced_model_ids": []
+    }
   },
   "event_refs": [],
   "evidence_refs": [],

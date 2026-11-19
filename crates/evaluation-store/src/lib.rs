@@ -28,6 +28,7 @@ mod local;
 mod metadata;
 mod recorder;
 mod scheduler;
+pub mod usage;
 
 pub use artifact::{ArtifactStore, FsArtifactStore};
 pub use canonical::{canonical_json, sha256_hex};

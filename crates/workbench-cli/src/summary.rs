@@ -1,8 +1,9 @@
 //! `workbench summary` and `workbench compare` (ADR-0020).
 
 use cybercore_evaluation_store::analysis::{
-    compare, pass_rate, record_comparison, record_summary, Comparison, EvaluationOutcomes,
-    PassRate, SummaryRecords, CONFIDENCE_LEVEL,
+    compare, compare_resources, pass_rate, record_comparison, record_resource_comparisons,
+    record_summary, resource_summaries, Comparison, EvaluationOutcomes, PassRate,
+    ResourceComparison, ResourceMetric, ResourceSummary, SummaryRecords, CONFIDENCE_LEVEL,
 };
 use cybercore_evaluation_store::LocalStore;
 use serde_json::{json, Value};
@@ -47,6 +48,129 @@ fn rate_json(evaluation_id: &str, rate: &PassRate, records: &SummaryRecords) -> 
     })
 }
 
+fn resources_json(summaries: &[ResourceSummary], records: &SummaryRecords) -> Value {
+    summaries
+        .iter()
+        .zip(&records.resource_metric_result_ids)
+        .map(|(s, id)| {
+            json!({
+                "metric_id": s.metric.id(),
+                "unit": s.metric.unit(),
+                "estimator": s.metric.estimator(),
+                "self_reported": s.metric.self_reported(),
+                "estimate": s.estimate,
+                "interval": s.interval.map(|(lower, upper)| json!({
+                    "lower": lower, "upper": upper, "method": "cluster_bootstrap", "confidence_level": CONFIDENCE_LEVEL,
+                })),
+                "p90": s.p90,
+                "total": s.total,
+                "currency": s.currency,
+                "status": s.status,
+                "eligible": s.eligible,
+                "observed": s.observed,
+                "missing": s.missing,
+                "excluded": s.excluded,
+                "not_run": s.not_run,
+                "limitations": s.limitations,
+                "metric_result_id": id,
+            })
+        })
+        .collect()
+}
+
+/// A value in the metric's unit, for people: seconds, tokens or currency.
+fn amount(metric: ResourceMetric, value: f64, currency: Option<&str>) -> String {
+    match metric {
+        ResourceMetric::WallTime if value.abs() >= 1000.0 => format!("{:.2} s", value / 1000.0),
+        ResourceMetric::WallTime => format!("{value:.0} ms"),
+        ResourceMetric::Tokens => format!("{value:.0} tokens"),
+        ResourceMetric::Cost => format!("{:.4} {}", value / 1e6, currency.unwrap_or("")),
+    }
+}
+
+fn label(metric: ResourceMetric) -> &'static str {
+    match metric {
+        ResourceMetric::WallTime => "wall time ",
+        ResourceMetric::Tokens => "tokens    ",
+        ResourceMetric::Cost => "cost      ",
+    }
+}
+
+fn resource_lines(summaries: &[ResourceSummary]) -> Vec<String> {
+    summaries
+        .iter()
+        .map(|s| {
+            let currency = s.currency.as_deref();
+            let Some(estimate) = s.estimate else {
+                return format!(
+                    "  {}  no data ({})",
+                    label(s.metric),
+                    s.status.replace('_', " ")
+                );
+            };
+            let mut line = format!(
+                "  {}  {} {}",
+                label(s.metric),
+                if s.metric.estimator() == "median" {
+                    "median"
+                } else {
+                    "mean"
+                },
+                amount(s.metric, estimate, currency)
+            );
+            if let Some((lower, upper)) = s.interval {
+                line.push_str(&format!(
+                    "   95% interval {} – {}",
+                    amount(s.metric, lower, currency),
+                    amount(s.metric, upper, currency)
+                ));
+            }
+            if let Some(p90) = s.p90 {
+                line.push_str(&format!("   p90 {}", amount(s.metric, p90, currency)));
+            }
+            if let Some(total) = s.total {
+                line.push_str(&format!("   total {}", amount(s.metric, total, currency)));
+            }
+            line.push_str(&format!(
+                "   ({} of {} trial(s){}; {})",
+                s.observed,
+                s.eligible,
+                if s.metric.self_reported() {
+                    ", self-reported"
+                } else {
+                    ""
+                },
+                s.status.replace('_', " ")
+            ));
+            line
+        })
+        .collect()
+}
+
+/// Notes from every summary, each said once, in order.
+fn notes<'a>(lists: impl IntoIterator<Item = &'a Vec<String>>) -> Vec<&'a String> {
+    let mut seen = std::collections::BTreeSet::new();
+    lists
+        .into_iter()
+        .flatten()
+        .filter(|note| seen.insert(note.as_str()))
+        .collect()
+}
+
+fn say_notes(notes: &[&String]) -> Result<(), String> {
+    for (index, note) in notes.iter().enumerate() {
+        say!(
+            "  {}  {note}",
+            if index == 0 {
+                "notes     "
+            } else {
+                "          "
+            }
+        );
+    }
+    Ok(())
+}
+
 fn rate_text(rate: &PassRate) -> String {
     match rate.estimate {
         None => "no data".into(),
@@ -56,9 +180,16 @@ fn rate_text(rate: &PassRate) -> String {
 
 pub fn summary(store_dir: &Path, evaluation_id: &str, as_json: bool) -> Result<(), String> {
     let store = open(store_dir)?;
-    let (_, rate, records) = summarise(&store, evaluation_id)?;
+    let (outcomes, rate, records) = summarise(&store, evaluation_id)?;
+    let resources = resource_summaries(&outcomes);
     if as_json {
-        let out = rate_json(evaluation_id, &rate, &records);
+        let mut out = rate_json(evaluation_id, &rate, &records);
+        if let Some(map) = out.as_object_mut() {
+            map.insert(
+                "speed_and_cost".into(),
+                resources_json(&resources, &records),
+            );
+        }
         say!(
             "{}",
             serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
@@ -87,20 +218,17 @@ pub fn summary(store_dir: &Path, evaluation_id: &str, as_json: bool) -> Result<(
         rate.attempts
     );
     say!("  status      {}", rate.status.replace('_', " "));
-    for (index, note) in rate.limitations.iter().enumerate() {
-        say!(
-            "  {}  {note}",
-            if index == 0 {
-                "notes     "
-            } else {
-                "          "
-            }
-        );
+    for line in resource_lines(&resources) {
+        say!("{line}");
     }
+    say_notes(&notes(
+        std::iter::once(&rate.limitations).chain(resources.iter().map(|s| &s.limitations)),
+    ))?;
     say!(
-        "  recorded    {}, {}",
+        "  recorded    {}, {} and {} speed and cost result(s)",
         records.metric_result_id,
-        records.analysis_result_id
+        records.analysis_result_id,
+        records.resource_metric_result_ids.len()
     );
     Ok(())
 }
@@ -146,11 +274,24 @@ pub fn compare_evaluations(
         &comparison,
     )
     .map_err(|e| e.to_string())?;
+    let resources = compare_resources(&base, &treat);
+    let resource_ids = record_resource_comparisons(
+        &store,
+        (&base, &base_records),
+        (&treat, &treat_records),
+        &resources,
+    )
+    .map_err(|e| e.to_string())?;
     if as_json {
         let out = json!({
             "baseline": rate_json(baseline_id, &base_rate, &base_records),
             "treatment": rate_json(treatment_id, &treat_rate, &treat_records),
             "comparison": comparison_json(&comparison, &id),
+            "speed_and_cost": resources
+                .iter()
+                .zip(&resource_ids)
+                .map(|(c, id)| resource_comparison_json(c, id))
+                .collect::<Vec<_>>(),
         });
         say!(
             "{}",
@@ -205,6 +346,74 @@ pub fn compare_evaluations(
             }
         );
     }
-    say!("  recorded    {id}");
+    say!("  speed and cost, paired by task (lower is better; exploratory)");
+    let currency = resource_summaries(&base)
+        .into_iter()
+        .find_map(|s| s.currency);
+    for c in &resources {
+        let line = match c.difference.filter(|_| c.status != "not_comparable") {
+            None => format!(
+                "  {}  {}{}",
+                label(c.metric),
+                c.status.replace('_', " "),
+                if c.mismatches.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", c.mismatches.join(", ").replace('_', " "))
+                }
+            ),
+            Some(difference) => {
+                let money = currency.as_deref();
+                let mut line = format!(
+                    "  {}  {}{} per trial",
+                    label(c.metric),
+                    if difference > 0.0 { "+" } else { "" },
+                    amount(c.metric, difference, money)
+                );
+                if let Some(relative) = c.relative {
+                    line.push_str(&format!(" ({:+.1}%)", relative * 100.0));
+                }
+                if let Some((lower, upper)) = c.interval {
+                    line.push_str(&format!(
+                        "   95% interval {} to {}",
+                        amount(c.metric, lower, money),
+                        amount(c.metric, upper, money)
+                    ));
+                }
+                line.push_str(&format!(
+                    "   {}; {} over {} task(s)",
+                    c.direction.replace('_', " "),
+                    c.status.replace('_', " "),
+                    c.matched_tasks
+                ));
+                line
+            }
+        };
+        say!("{line}");
+    }
+    say_notes(&notes(resources.iter().map(|c| &c.limitations)))?;
+    say!(
+        "  recorded    {id} and {} speed and cost comparison(s)",
+        resource_ids.len()
+    );
     Ok(())
+}
+
+fn resource_comparison_json(c: &ResourceComparison, id: &str) -> Value {
+    json!({
+        "metric_id": c.metric.id(),
+        "unit": c.metric.unit(),
+        "status": c.status,
+        "matched_tasks": c.matched_tasks,
+        "difference": c.difference,
+        "relative_difference": c.relative,
+        "interval": c.interval.map(|(lower, upper)| json!({
+            "lower": lower, "upper": upper, "method": "paired_bootstrap", "confidence_level": CONFIDENCE_LEVEL,
+        })),
+        "direction": c.direction,
+        "inferential_status": c.inferential_status,
+        "mismatches": c.mismatches,
+        "limitations": c.limitations,
+        "comparison_result_id": id,
+    })
 }

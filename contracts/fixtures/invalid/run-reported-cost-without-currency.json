@@ -1,0 +1,63 @@
+{
+  "record_id": "RUN-0002",
+  "record_type": "run",
+  "schema_version": "0.1.0",
+  "created_at": "2026-11-17T19:00:00Z",
+  "provenance": {
+    "source": {
+      "system": "workbench-fixture",
+      "component": "fixture-author",
+      "component_version": "0.1.0",
+      "origin_id": "fixture-001"
+    },
+    "captured_by": "fixture-author",
+    "capture_version": "0.1.0"
+  },
+  "evaluation_ref": {
+    "record_id": "EVAL-0001",
+    "record_type": "evaluation"
+  },
+  "trial_ref": {
+    "record_id": "TRIAL-0001",
+    "record_type": "trial"
+  },
+  "task_revision_ref": {
+    "record_id": "TASK-0001",
+    "record_type": "task_revision"
+  },
+  "system_fingerprint_ref": {
+    "record_id": "FP-0001",
+    "record_type": "system_fingerprint"
+  },
+  "attempt_number": 1,
+  "attempt_kind": "initial",
+  "runner": {
+    "runner_id": "local-runner-1",
+    "runner_type": "local",
+    "runner_version": "0.1.0"
+  },
+  "execution_status": "running",
+  "run_outcome": "pending",
+  "verification_state": "not_started",
+  "started_at": "2026-11-17T19:11:00Z",
+  "agent_report": {
+    "completion_claim": "no_claim",
+    "reported_usage": {
+      "source": "agent_self_reported",
+      "report_status": "reported",
+      "input_tokens": 12000,
+      "output_tokens": 3400,
+      "models": [
+        {
+          "model_id": "claude-sonnet-5-5",
+          "input_tokens": 12000,
+          "output_tokens": 3400
+        }
+      ],
+      "cost_microunits": 87000
+    }
+  },
+  "event_refs": [],
+  "evidence_refs": [],
+  "verification_refs": []
+}

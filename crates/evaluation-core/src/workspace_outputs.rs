@@ -9,8 +9,8 @@
 
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// Deepest directory nesting that is walked.
@@ -47,6 +47,29 @@ pub fn artifact_staging_dir(artifact_root: &Path, request_id: &str) -> PathBuf {
 /// stopping as soon as `max_bytes` or `max_files` would be exceeded.
 pub fn collect_outputs(
     dir: &Path,
+    max_bytes: u64,
+    max_files: usize,
+) -> io::Result<CollectedOutputs> {
+    collect(dir, None, max_bytes, max_files)
+}
+
+/// Like [`collect_outputs`], and also copies every accepted file to the same
+/// relative path under `dest` (created with mode 0700/0600). Used when the
+/// outputs live somewhere the host must not keep reading from, such as a
+/// paused container's tmpfs. On a limit breach `dest` may hold a partial
+/// copy; the caller discards it.
+pub fn collect_outputs_into(
+    dir: &Path,
+    dest: &Path,
+    max_bytes: u64,
+    max_files: usize,
+) -> io::Result<CollectedOutputs> {
+    collect(dir, Some(dest), max_bytes, max_files)
+}
+
+fn collect(
+    dir: &Path,
+    dest: Option<&Path>,
     max_bytes: u64,
     max_files: usize,
 ) -> io::Result<CollectedOutputs> {
@@ -96,6 +119,25 @@ pub fn collect_outputs(
                 .read(true)
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(entry.path())?;
+            let mut copy = match dest {
+                Some(dest) => {
+                    let target = dest.join(&relative);
+                    if let Some(parent) = target.parent() {
+                        fs::DirBuilder::new()
+                            .recursive(true)
+                            .mode(0o700)
+                            .create(parent)?;
+                    }
+                    Some(
+                        OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .mode(0o600)
+                            .open(target)?,
+                    )
+                }
+                None => None,
+            };
             let mut hasher = Sha256::new();
             let mut buffer = [0_u8; 64 * 1024];
             let mut length = 0_u64;
@@ -111,6 +153,12 @@ pub fn collect_outputs(
                     return Ok(out);
                 }
                 hasher.update(&buffer[..read]);
+                if let Some(copy) = copy.as_mut() {
+                    copy.write_all(&buffer[..read])?;
+                }
+            }
+            if let Some(copy) = copy.as_mut() {
+                copy.sync_all()?;
             }
             out.total_bytes += length;
             out.files.push(CollectedFile {
@@ -194,6 +242,21 @@ mod tests {
             .unwrap()
             .contains("more than 1 output files"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn copying_collection_reproduces_accepted_files_only() {
+        let dir = temp("copy-src");
+        let dest = temp("copy-dest").join("out");
+        fs::create_dir_all(dir.join("a")).unwrap();
+        fs::write(dir.join("a/x.txt"), b"x").unwrap();
+        symlink("/etc/passwd", dir.join("leak")).unwrap();
+        let out = collect_outputs_into(&dir, &dest, 1024, 10).unwrap();
+        assert_eq!(out.files.len(), 1);
+        assert_eq!(fs::read(dest.join("a/x.txt")).unwrap(), b"x");
+        assert!(!dest.join("leak").exists());
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(dest.parent().unwrap()).unwrap();
     }
 
     #[test]

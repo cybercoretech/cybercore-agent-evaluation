@@ -1,6 +1,9 @@
 //! The evaluation file `workbench run` reads.
 
-use cybercore_evaluation_core::{EvaluationSchedule, LocalProcessRunnerConfig, RecordReference};
+use cybercore_evaluation_core::{
+    ContainerRunner, ContainerRunnerConfig, EvaluationSchedule, LocalProcessRunner,
+    LocalProcessRunnerConfig, RecordReference, Runner, RunnerError,
+};
 use cybercore_evaluation_store::{
     Check, ChecksVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
 };
@@ -51,6 +54,53 @@ pub enum RunnerSpec {
         #[serde(default)]
         limits: RunnerLimits,
     },
+    /// Rootless Podman containers with cgroup memory/CPU/process limits, no
+    /// network and a read-only image (ADR-0015). Images must already be
+    /// pulled; the runner never pulls.
+    Podman {
+        #[serde(default = "default_podman_runner_id")]
+        runner_id: String,
+        #[serde(default = "default_podman")]
+        podman_path: PathBuf,
+        /// Logical image IDs → local image references (pinned to image IDs at start).
+        images: BTreeMap<String, String>,
+        /// Logical executable IDs → absolute paths inside the images.
+        allowed_executables: BTreeMap<String, String>,
+        #[serde(default)]
+        allowed_environment_keys: BTreeSet<String>,
+        #[serde(default)]
+        limits: RunnerLimits,
+        #[serde(default)]
+        resources: ContainerResources,
+    },
+}
+
+/// Per-container cgroup limits.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ContainerResources {
+    pub memory_bytes: u64,
+    /// Thousandths of a CPU (1000 = one CPU).
+    pub cpu_millis: u32,
+    pub pids_limit: u32,
+}
+
+impl Default for ContainerResources {
+    fn default() -> Self {
+        Self {
+            memory_bytes: 512 * 1024 * 1024,
+            cpu_millis: 1000,
+            pids_limit: 256,
+        }
+    }
+}
+
+fn default_podman_runner_id() -> String {
+    "workbench-podman".into()
+}
+
+fn default_podman() -> PathBuf {
+    PathBuf::from("/usr/bin/podman")
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,28 +271,70 @@ impl EvaluationFile {
                 self.format
             ));
         }
-        let RunnerSpec::LocalBubblewrap {
-            allowed_executables,
-            bubblewrap_path,
-            ..
-        } = &self.runner;
-        if !bubblewrap_path.is_absolute() {
-            return Err("runner.bubblewrap_path must be absolute".into());
-        }
-        if allowed_executables.is_empty() {
-            return Err("runner.allowed_executables must list at least one executable".into());
-        }
-        for (id, path) in allowed_executables {
-            if !path.is_absolute() {
-                return Err(format!(
-                    "runner.allowed_executables.{id} must be an absolute path"
-                ));
+        let executables: BTreeSet<&str> = match &self.runner {
+            RunnerSpec::LocalBubblewrap {
+                allowed_executables,
+                bubblewrap_path,
+                ..
+            } => {
+                if !bubblewrap_path.is_absolute() {
+                    return Err("runner.bubblewrap_path must be absolute".into());
+                }
+                for (id, path) in allowed_executables {
+                    if !path.is_absolute() {
+                        return Err(format!(
+                            "runner.allowed_executables.{id} must be an absolute path"
+                        ));
+                    }
+                }
+                allowed_executables.keys().map(String::as_str).collect()
             }
+            RunnerSpec::Podman {
+                podman_path,
+                images,
+                allowed_executables,
+                ..
+            } => {
+                if !podman_path.is_absolute() {
+                    return Err("runner.podman_path must be absolute".into());
+                }
+                if images.is_empty() {
+                    return Err("runner.images must list at least one image".into());
+                }
+                for (id, path) in allowed_executables {
+                    if !path.starts_with('/') {
+                        return Err(format!(
+                            "runner.allowed_executables.{id} must be an absolute path inside the image"
+                        ));
+                    }
+                }
+                for trial in &self.schedule.trials {
+                    let id = &trial.trial_ref.record_id;
+                    match trial.task_input.get("image_id").and_then(Value::as_str) {
+                        Some(image) if images.contains_key(image) => {}
+                        Some(image) => {
+                            return Err(format!(
+                                "schedule.trials[{id}].task_input.image_id {image:?} is not in runner.images"
+                            ))
+                        }
+                        None if images.len() == 1 => {}
+                        None => {
+                            return Err(format!(
+                                "schedule.trials[{id}].task_input.image_id is required when runner.images lists several images"
+                            ))
+                        }
+                    }
+                }
+                allowed_executables.keys().map(String::as_str).collect()
+            }
+        };
+        if executables.is_empty() {
+            return Err("runner.allowed_executables must list at least one executable".into());
         }
         for trial in &self.schedule.trials {
             let id = &trial.trial_ref.record_id;
             match trial.task_input.get("executable_id").and_then(Value::as_str) {
-                Some(executable) if allowed_executables.contains_key(executable) => {}
+                Some(executable) if executables.contains(executable) => {}
                 Some(executable) => {
                     return Err(format!(
                         "schedule.trials[{id}].task_input.executable_id {executable:?} is not in runner.allowed_executables"
@@ -250,7 +342,7 @@ impl EvaluationFile {
                 }
                 None => {
                     return Err(format!(
-                        "schedule.trials[{id}].task_input.executable_id is required by the local_bubblewrap runner"
+                        "schedule.trials[{id}].task_input.executable_id is required by the runner"
                     ))
                 }
             }
@@ -274,7 +366,7 @@ impl EvaluationFile {
                 ));
             }
         }
-        let RunnerSpec::LocalBubblewrap { limits, .. } = &self.runner;
+        let limits = self.limits();
         for trial in &self.schedule.trials {
             if collects_outputs(trial) {
                 let id = &trial.trial_ref.record_id;
@@ -368,37 +460,81 @@ impl EvaluationFile {
         self.schedule.trials.iter().any(collects_outputs)
     }
 
-    /// `artifact_root` is used only when some trial collects outputs.
-    pub fn runner_config(
+    fn limits(&self) -> &RunnerLimits {
+        match &self.runner {
+            RunnerSpec::LocalBubblewrap { limits, .. } | RunnerSpec::Podman { limits, .. } => {
+                limits
+            }
+        }
+    }
+
+    /// Builds the declared runner. `artifact_root` is used only when some
+    /// trial collects outputs.
+    pub fn build_runner(
         &self,
         temporary_root: PathBuf,
         artifact_root: PathBuf,
-    ) -> LocalProcessRunnerConfig {
-        let RunnerSpec::LocalBubblewrap {
-            runner_id,
-            bubblewrap_path,
-            allowed_executables,
-            allowed_environment_keys,
-            limits,
-        } = &self.runner;
-        LocalProcessRunnerConfig {
-            runner_id: runner_id.clone(),
-            runner_version: env!("CARGO_PKG_VERSION").into(),
-            bubblewrap_path: bubblewrap_path.clone(),
-            temporary_root,
-            allowed_executables: allowed_executables.clone(),
-            allowed_environment_keys: allowed_environment_keys.clone(),
-            max_wall_time_ms: limits.max_wall_time_ms,
-            max_output_bytes: limits.max_output_bytes,
-            max_workspace_bytes: limits.max_workspace_bytes,
-            max_tmp_bytes: limits.max_tmp_bytes,
-            max_input_file_bytes: limits.max_input_file_bytes,
-            max_input_files: limits.max_input_files,
-            max_arguments: limits.max_arguments,
-            max_argument_bytes: limits.max_argument_bytes,
-            artifact_root: self.collects_outputs().then_some(artifact_root),
-            max_artifact_bytes: limits.max_artifact_bytes,
-            max_output_files: limits.max_output_files,
+    ) -> Result<Box<dyn Runner>, RunnerError> {
+        let artifact_root = self.collects_outputs().then_some(artifact_root);
+        match &self.runner {
+            RunnerSpec::LocalBubblewrap {
+                runner_id,
+                bubblewrap_path,
+                allowed_executables,
+                allowed_environment_keys,
+                limits,
+            } => Ok(Box::new(LocalProcessRunner::new(
+                LocalProcessRunnerConfig {
+                    runner_id: runner_id.clone(),
+                    runner_version: env!("CARGO_PKG_VERSION").into(),
+                    bubblewrap_path: bubblewrap_path.clone(),
+                    temporary_root,
+                    allowed_executables: allowed_executables.clone(),
+                    allowed_environment_keys: allowed_environment_keys.clone(),
+                    max_wall_time_ms: limits.max_wall_time_ms,
+                    max_output_bytes: limits.max_output_bytes,
+                    max_workspace_bytes: limits.max_workspace_bytes,
+                    max_tmp_bytes: limits.max_tmp_bytes,
+                    max_input_file_bytes: limits.max_input_file_bytes,
+                    max_input_files: limits.max_input_files,
+                    max_arguments: limits.max_arguments,
+                    max_argument_bytes: limits.max_argument_bytes,
+                    artifact_root,
+                    max_artifact_bytes: limits.max_artifact_bytes,
+                    max_output_files: limits.max_output_files,
+                },
+            )?)),
+            RunnerSpec::Podman {
+                runner_id,
+                podman_path,
+                images,
+                allowed_executables,
+                allowed_environment_keys,
+                limits,
+                resources,
+            } => Ok(Box::new(ContainerRunner::new(ContainerRunnerConfig {
+                runner_id: runner_id.clone(),
+                runner_version: env!("CARGO_PKG_VERSION").into(),
+                podman_path: podman_path.clone(),
+                temporary_root,
+                images: images.clone(),
+                allowed_executables: allowed_executables.clone(),
+                allowed_environment_keys: allowed_environment_keys.clone(),
+                max_wall_time_ms: limits.max_wall_time_ms,
+                max_output_bytes: limits.max_output_bytes,
+                memory_bytes: resources.memory_bytes,
+                cpu_millis: resources.cpu_millis,
+                pids_limit: resources.pids_limit,
+                workspace_bytes: limits.max_workspace_bytes,
+                tmp_bytes: limits.max_tmp_bytes,
+                max_input_file_bytes: limits.max_input_file_bytes,
+                max_input_files: limits.max_input_files,
+                max_arguments: limits.max_arguments,
+                max_argument_bytes: limits.max_argument_bytes,
+                artifact_root,
+                max_artifact_bytes: limits.max_artifact_bytes,
+                max_output_files: limits.max_output_files,
+            })?)),
         }
     }
 

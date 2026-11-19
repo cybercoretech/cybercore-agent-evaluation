@@ -72,3 +72,38 @@ jobs:
         run: |
           cargo test --locked -p cybercore-evaluation-core --test workspace_outputs_bwrap -- --nocapture
           cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture
+  container:
+    name: Podman container runner (real execution)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Give the runner user a systemd session with delegated cgroup controllers
+        # Rootless Podman applies memory/CPU/pids limits only through a user
+        # systemd manager that owns delegated controllers. Without them the
+        # container runner refuses to run, so this must succeed for the job to pass.
+        run: |
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+          sudo systemctl daemon-reload
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo loginctl enable-linger "$USER"
+          uid="$(id -u)"
+          for _ in $(seq 1 40); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          cat "/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/cgroup.controllers"
+      - name: Pull the test image (the runner itself never pulls)
+        run: |
+          podman --version
+          podman info --format 'cgroups={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}} rootless={{.Host.Security.Rootless}}'
+          podman pull docker.io/library/ubuntu:22.04
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Container runner and workbench CLI against real Podman (skips are failures here)
+        env:
+          WORKBENCH_REQUIRE_PODMAN: "1"
+        run: |
+          cargo test --locked -p cybercore-evaluation-core --test container_podman -- --nocapture
+          cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture podman_

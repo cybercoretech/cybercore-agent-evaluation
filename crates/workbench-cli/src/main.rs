@@ -21,9 +21,7 @@ macro_rules! say {
 }
 
 use clap::{Parser, Subcommand};
-use cybercore_evaluation_core::{
-    AttemptIdentity, EvaluationSchedule, LocalProcessRunner, RecordReference,
-};
+use cybercore_evaluation_core::{AttemptIdentity, EvaluationSchedule, RecordReference};
 use cybercore_evaluation_store::{
     run_ready_trials, ContractValidator, DurableScheduler, LocalStore, OutcomePolicy, PutOutcome,
     RunRecorderConfig,
@@ -163,12 +161,11 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
     }
 
     let artifact_root = store_dir.join("runner-artifacts");
-    let runner = LocalProcessRunner::new(
-        evaluation.runner_config(store_dir.join("runner-tmp"), artifact_root.clone()),
-    )
-    .map_err(|e| format!("runner: {e}"))?;
+    let runner = evaluation
+        .build_runner(store_dir.join("runner-tmp"), artifact_root.clone())
+        .map_err(|e| format!("runner: {e}"))?;
     let mut config = RunRecorderConfig::for_runner(
-        &runner,
+        runner.as_ref(),
         evaluation.project_ref.clone(),
         evaluation.store_output_evidence,
     );
@@ -200,7 +197,7 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
         .block_on(run_ready_trials(
             &store,
             &mut scheduler,
-            &runner,
+            runner.as_ref(),
             &config,
             verifier.as_ref(),
             move |trial_id, attempt| identity(&eval_for_ids, trial_id, attempt),

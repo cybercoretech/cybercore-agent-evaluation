@@ -442,3 +442,107 @@ fn file_checks_judge_what_the_agent_wrote() {
         "staging left behind"
     );
 }
+
+#[test]
+fn podman_runner_specs_are_validated() {
+    let dir = TempDir::new("podman-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "unknown image",
+            Box::new(|v| {
+                v["schedule"]["trials"][0]["task_input"]["image_id"] = "alpine".into();
+            }),
+            "task_input.image_id \"alpine\" is not in runner.images",
+        ),
+        (
+            "relative in-image path",
+            Box::new(|v| {
+                v["runner"]["allowed_executables"]["sh"] = "bin/sh".into();
+            }),
+            "runner.allowed_executables.sh must be an absolute path inside the image",
+        ),
+        (
+            "no images",
+            Box::new(|v| {
+                v["runner"]["images"] = serde_json::json!({});
+            }),
+            "runner.images must list at least one image",
+        ),
+        (
+            "unknown resource",
+            Box::new(|v| {
+                v["runner"]["resources"]["gpu"] = 1.into();
+            }),
+            "unknown field `gpu`",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("container-report.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{}.json", name.replace(' ', "-")), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let message = stderr(&output);
+        assert!(
+            message.contains(expected),
+            "{name}: expected {expected:?} in {message}"
+        );
+    }
+}
+
+/// Real rootless-Podman run through the CLI. Skips (loudly) without podman or
+/// the ubuntu:22.04 image, unless WORKBENCH_REQUIRE_PODMAN is set.
+#[test]
+fn podman_runner_enforces_limits_and_checks_files() {
+    let dir = TempDir::new("podman-run");
+    let file = dir.file("eval.json", &load_example("container-report.json"));
+    let store = dir.0.join("store");
+    let output = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ],
+        &[],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_PODMAN").is_none(),
+            "WORKBENCH_REQUIRE_PODMAN is set but the container runner is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: container runner unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status = workbench(
+        &["status", "EVAL-CONTAINER-REPORT", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let report: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let outcome = |i: usize| {
+        let run = &report["trials"][i]["runs"][0];
+        (
+            run["execution_status"].as_str().unwrap().to_string(),
+            run["run_outcome"].as_str().unwrap().to_string(),
+        )
+    };
+    assert_eq!(outcome(0), ("finished".into(), "pass".into()));
+    assert_eq!(outcome(1), ("finished".into(), "fail".into()));
+    // The memory hog is stopped by the cgroup limit: an execution error,
+    // not a task failure.
+    assert_eq!(outcome(2), ("errored".into(), "not_scored".into()));
+}

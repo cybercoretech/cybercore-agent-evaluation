@@ -8,6 +8,7 @@ pub mod local_process;
 pub mod orchestration;
 pub mod run_state;
 pub mod runner;
+pub mod workspace_outputs;
 
 pub use domain_invariants::{validate_domain_fixture, validate_domain_fixtures};
 pub use local_process::{
@@ -21,9 +22,12 @@ pub use orchestration::{
 pub use run_state::{ExecutionStatus, RunOutcome, RunState, RunStateError, VerificationState};
 pub use runner::{
     execute_with_runner, ArtifactManifest, ExecutionBudget, ExecutionDisposition, ExecutionRequest,
-    NetworkPolicy, RecordReference, ResourceUsage, Runner, RunnerCapabilities, RunnerDescriptor,
-    RunnerError, RunnerErrorKind, RunnerEvent, RunnerFailure, RunnerFuture, RunnerResult,
-    RunnerType, SideEffectPolicy,
+    NetworkPolicy, RecordReference, RedactionState, ResourceUsage, Runner, RunnerCapabilities,
+    RunnerDescriptor, RunnerError, RunnerErrorKind, RunnerEvent, RunnerFailure, RunnerFuture,
+    RunnerResult, RunnerType, SideEffectPolicy,
+};
+pub use workspace_outputs::{
+    artifact_staging_dir, collect_outputs, CollectedFile, CollectedOutputs,
 };
 
 /// Version of the core's public Rust API surface.

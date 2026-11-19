@@ -74,7 +74,7 @@ The concrete adapter requires a Tokio runtime for asynchronous process I/O. A ze
 
 ## Explicit non-goals / limitations
 
-- Workspace file outputs are ephemeral and are **not** exported as `ArtifactManifest` records in this version. Use stdout/stderr for returned data until the artifact/evidence-store adapter is implemented. Do not claim persistent artifact capture.
+- Workspace files are ephemeral unless a task sets `collect_outputs`: then regular files left in `/workspace/output` after a clean exit are collected as `ArtifactManifest`s and staged under the runner's `artifact_root` (ADR-0014). Links and special files are rejected unread; runs that were killed have no collected files. The output directory is on the host filesystem, so an opted-in task can fill the disk during its run.
 - No cgroup CPU/memory/process-count quotas are applied by this first version. tmpfs size limits bound writable filesystem capacity, not aggregate memory use, CPU consumption, or process count. Concurrent runner instances can multiply host resource pressure. Do not use this runner for hostile multi-tenant workloads or arbitrary public submissions.
 - Bubblewrap namespaces and mount isolation reduce host access but do not substitute for a disposable VM or a separately managed container runtime with cgroup resource controls and a reviewed seccomp profile.
 - The initial executable is allowlisted, but the read-only `/usr` runtime tree is visible; a process may invoke other binaries present there. Do not treat the executable ID allowlist as a complete command-execution policy. The allowlist constrains the initial exec target only.

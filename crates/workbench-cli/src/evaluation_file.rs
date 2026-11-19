@@ -1,7 +1,9 @@
 //! The evaluation file `workbench run` reads.
 
 use cybercore_evaluation_core::{EvaluationSchedule, LocalProcessRunnerConfig, RecordReference};
-use cybercore_evaluation_store::StdoutEqualsVerifier;
+use cybercore_evaluation_store::{
+    Check, ChecksVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +64,10 @@ pub struct RunnerLimits {
     pub max_input_files: usize,
     pub max_arguments: usize,
     pub max_argument_bytes: u64,
+    /// Ceiling for a trial's `max_artifact_bytes` (collected output files).
+    pub max_artifact_bytes: u64,
+    /// Most files one run may leave in `/workspace/output`.
+    pub max_output_files: usize,
 }
 
 impl Default for RunnerLimits {
@@ -75,6 +81,8 @@ impl Default for RunnerLimits {
             max_input_files: 64,
             max_arguments: 256,
             max_argument_bytes: 64 * 1024,
+            max_artifact_bytes: 16 * 1024 * 1024,
+            max_output_files: 256,
         }
     }
 }
@@ -84,6 +92,106 @@ impl Default for RunnerLimits {
 pub enum VerifierSpec {
     /// Pass when the captured stdout equals the expected text for the trial.
     StdoutEquals { expected: BTreeMap<String, String> },
+    /// Several criteria per trial over stdout and the files a trial with
+    /// `task_input.collect_outputs` leaves in `/workspace/output`.
+    Checks {
+        checks: BTreeMap<String, Vec<CheckSpec>>,
+    },
+}
+
+/// One criterion in a `checks` verifier. Paths are relative to
+/// `/workspace/output`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CheckSpec {
+    StdoutEquals {
+        criterion_id: String,
+        expected: String,
+    },
+    StdoutContains {
+        criterion_id: String,
+        text: String,
+    },
+    FileExists {
+        criterion_id: String,
+        path: String,
+    },
+    FileAbsent {
+        criterion_id: String,
+        path: String,
+    },
+    FileEquals {
+        criterion_id: String,
+        path: String,
+        expected: String,
+    },
+    FileContains {
+        criterion_id: String,
+        path: String,
+        text: String,
+    },
+}
+
+impl CheckSpec {
+    fn criterion_id(&self) -> &str {
+        match self {
+            Self::StdoutEquals { criterion_id, .. }
+            | Self::StdoutContains { criterion_id, .. }
+            | Self::FileExists { criterion_id, .. }
+            | Self::FileAbsent { criterion_id, .. }
+            | Self::FileEquals { criterion_id, .. }
+            | Self::FileContains { criterion_id, .. } => criterion_id,
+        }
+    }
+
+    fn path(&self) -> Option<&str> {
+        match self {
+            Self::FileExists { path, .. }
+            | Self::FileAbsent { path, .. }
+            | Self::FileEquals { path, .. }
+            | Self::FileContains { path, .. } => Some(path),
+            Self::StdoutEquals { .. } | Self::StdoutContains { .. } => None,
+        }
+    }
+
+    fn to_check(&self) -> CriterionCheck {
+        let check = match self {
+            Self::StdoutEquals { expected, .. } => Check::StdoutEquals {
+                expected: expected.clone(),
+            },
+            Self::StdoutContains { text, .. } => Check::StdoutContains { text: text.clone() },
+            Self::FileExists { path, .. } => Check::FileExists { path: path.clone() },
+            Self::FileAbsent { path, .. } => Check::FileAbsent { path: path.clone() },
+            Self::FileEquals { path, expected, .. } => Check::FileEquals {
+                path: path.clone(),
+                expected: expected.clone(),
+            },
+            Self::FileContains { path, text, .. } => Check::FileContains {
+                path: path.clone(),
+                text: text.clone(),
+            },
+        };
+        CriterionCheck {
+            criterion_id: self.criterion_id().to_string(),
+            check,
+        }
+    }
+}
+
+/// `[A-Za-z0-9][A-Za-z0-9._:-]{0,63}`: becomes part of record IDs.
+fn valid_criterion_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// A relative path made only of normal components (no `..`, no root).
+fn valid_output_path(path: &str) -> bool {
+    !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 fn default_runner_id() -> String {
@@ -166,17 +274,72 @@ impl EvaluationFile {
                 ));
             }
         }
-        let VerifierSpec::StdoutEquals { expected } = &self.verifier;
+        let RunnerSpec::LocalBubblewrap { limits, .. } = &self.runner;
+        for trial in &self.schedule.trials {
+            if collects_outputs(trial) {
+                let id = &trial.trial_ref.record_id;
+                let budget = trial.budget.max_artifact_bytes;
+                if budget == 0 || budget > limits.max_artifact_bytes {
+                    return Err(format!(
+                        "schedule.trials[{id}].budget.max_artifact_bytes must be between 1 and runner.limits.max_artifact_bytes ({}) when task_input.collect_outputs is true",
+                        limits.max_artifact_bytes
+                    ));
+                }
+            }
+        }
         let trial_ids: BTreeSet<&str> = self
             .schedule
             .trials
             .iter()
             .map(|t| t.trial_ref.record_id.as_str())
             .collect();
-        if let Some(unknown) = expected.keys().find(|k| !trial_ids.contains(k.as_str())) {
-            return Err(format!(
-                "verifier.expected.{unknown} does not name a trial in the schedule"
-            ));
+        match &self.verifier {
+            VerifierSpec::StdoutEquals { expected } => {
+                if let Some(unknown) = expected.keys().find(|k| !trial_ids.contains(k.as_str())) {
+                    return Err(format!(
+                        "verifier.expected.{unknown} does not name a trial in the schedule"
+                    ));
+                }
+            }
+            VerifierSpec::Checks { checks } => {
+                for (trial_id, specs) in checks {
+                    let Some(trial) = self
+                        .schedule
+                        .trials
+                        .iter()
+                        .find(|t| &t.trial_ref.record_id == trial_id)
+                    else {
+                        return Err(format!(
+                            "verifier.checks.{trial_id} does not name a trial in the schedule"
+                        ));
+                    };
+                    let mut seen = BTreeSet::new();
+                    for (index, spec) in specs.iter().enumerate() {
+                        let at = format!("verifier.checks.{trial_id}[{index}]");
+                        let criterion = spec.criterion_id();
+                        if !valid_criterion_id(criterion) {
+                            return Err(format!(
+                                "{at}.criterion_id {criterion:?} must match [A-Za-z0-9][A-Za-z0-9._:-]{{0,63}}"
+                            ));
+                        }
+                        if !seen.insert(criterion) {
+                            return Err(format!("{at}.criterion_id {criterion:?} is repeated"));
+                        }
+                        if let Some(path) = spec.path() {
+                            if !valid_output_path(path) {
+                                return Err(format!(
+                                    "{at}.path {path:?} must be relative to /workspace/output without '..'"
+                                ));
+                            }
+                            if !collects_outputs(trial) {
+                                return Err(format!(
+                                    "{at} checks a file, but schedule.trials[{trial_id}].task_input.collect_outputs is not true"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -188,16 +351,29 @@ impl EvaluationFile {
     /// Trials the verifier has no expectation for (they will be recorded as
     /// verification `unavailable`, never as passing).
     pub fn unverifiable_trials(&self) -> Vec<&str> {
-        let VerifierSpec::StdoutEquals { expected } = &self.verifier;
+        let configured = |id: &str| match &self.verifier {
+            VerifierSpec::StdoutEquals { expected } => expected.contains_key(id),
+            VerifierSpec::Checks { checks } => checks.get(id).is_some_and(|c| !c.is_empty()),
+        };
         self.schedule
             .trials
             .iter()
             .map(|t| t.trial_ref.record_id.as_str())
-            .filter(|id| !expected.contains_key(*id))
+            .filter(|id| !configured(id))
             .collect()
     }
 
-    pub fn runner_config(&self, temporary_root: PathBuf) -> LocalProcessRunnerConfig {
+    /// True when any trial asks the runner to collect `/workspace/output`.
+    pub fn collects_outputs(&self) -> bool {
+        self.schedule.trials.iter().any(collects_outputs)
+    }
+
+    /// `artifact_root` is used only when some trial collects outputs.
+    pub fn runner_config(
+        &self,
+        temporary_root: PathBuf,
+        artifact_root: PathBuf,
+    ) -> LocalProcessRunnerConfig {
         let RunnerSpec::LocalBubblewrap {
             runner_id,
             bubblewrap_path,
@@ -220,11 +396,36 @@ impl EvaluationFile {
             max_input_files: limits.max_input_files,
             max_arguments: limits.max_arguments,
             max_argument_bytes: limits.max_argument_bytes,
+            artifact_root: self.collects_outputs().then_some(artifact_root),
+            max_artifact_bytes: limits.max_artifact_bytes,
+            max_output_files: limits.max_output_files,
         }
     }
 
-    pub fn verifier(&self) -> StdoutEqualsVerifier {
-        let VerifierSpec::StdoutEquals { expected } = &self.verifier;
-        StdoutEqualsVerifier::new(expected.clone())
+    pub fn verifier(&self) -> Box<dyn Verifier> {
+        match &self.verifier {
+            VerifierSpec::StdoutEquals { expected } => {
+                Box::new(StdoutEqualsVerifier::new(expected.clone()))
+            }
+            VerifierSpec::Checks { checks } => Box::new(ChecksVerifier::new(
+                checks
+                    .iter()
+                    .map(|(trial, specs)| {
+                        (
+                            trial.clone(),
+                            specs.iter().map(CheckSpec::to_check).collect(),
+                        )
+                    })
+                    .collect(),
+            )),
+        }
     }
+}
+
+fn collects_outputs(trial: &cybercore_evaluation_core::TrialDefinition) -> bool {
+    trial
+        .task_input
+        .get("collect_outputs")
+        .and_then(Value::as_bool)
+        == Some(true)
 }

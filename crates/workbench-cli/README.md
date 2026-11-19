@@ -38,12 +38,16 @@ TRIAL-NUMBERS fails on purpose: its expected output says `4` where the file cont
 | `format` | `cybercore-workbench-evaluation/v0` |
 | `schedule` | the frozen `EvaluationSchedule`: trials, budgets, deny-all policies, retry policy, and `max_active_runs` (how many attempts run at once). It's immutable once stored. |
 | `runner` | `{"type": "local_bubblewrap", "allowed_executables": {...}, "limits": {...}}`; every trial's `task_input.executable_id` must be listed |
-| `verifier` | `{"type": "stdout_equals", "expected": {"TRIAL-ID": "exact stdout"}}`. This is hidden grader data, never part of a `task_input`. |
+| `verifier` | `{"type": "stdout_equals", "expected": {...}}`, or `{"type": "checks", "checks": {"TRIAL-ID": [{"criterion_id": "report-written", "kind": "file_equals", "path": "out/report.txt", "expected": "..."}]}}` with kinds `stdout_equals`, `stdout_contains`, `file_exists`, `file_absent`, `file_equals` and `file_contains`. This is hidden grader data, never part of a `task_input`. |
 | `project_ref` | the project the output evidence belongs to |
 | `store_output_evidence` | `true` stores each runner output as evidence. Only use it for non-sensitive tasks: the local runner does not redact. |
 | `task_revisions` | optional `task_revision` records stored before the run. Their criteria's `criticality` (mandatory, major or minor) and `required_criterion_ids` decide each run's outcome ([ADR-0013](../../docs/decisions/0013-concurrency-and-outcome-rules.md)). |
 
 Unknown fields are rejected, and every error names the file and the field.
+
+## 📁 Checking files the agent writes
+
+Set `"collect_outputs": true` in a trial's `task_input` and give it a positive `budget.max_artifact_bytes`. The sandbox then gets a writable `/workspace/output`; regular files left there after a clean exit are collected, digested and handed to `checks`. Symlinks, FIFOs and devices are rejected unread, and runs that time out have no collected files. `evaluations/report-files.json` is a complete example: one trial writes the report correctly, the other writes it to the wrong path and leaves a scratch file. See [ADR-0014](../../docs/decisions/0014-workspace-output-files.md).
 
 ## 🗄️ Store and environment
 

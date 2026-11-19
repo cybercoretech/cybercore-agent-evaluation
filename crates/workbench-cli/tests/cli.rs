@@ -6,7 +6,13 @@ use std::process::{Command, Output};
 const BIN: &str = env!("CARGO_BIN_EXE_workbench");
 
 fn example() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("evaluations/cat-smoke.json");
+    load_example("cat-smoke.json")
+}
+
+fn load_example(name: &str) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("evaluations")
+        .join(name);
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
@@ -320,4 +326,119 @@ fn run_executes_records_and_resumes_idempotently() {
     );
     assert_eq!(refused.status.code(), Some(1));
     assert!(stderr(&refused).contains("different schedule"));
+}
+
+#[test]
+fn file_checks_are_validated_against_the_schedule() {
+    let dir = TempDir::new("file-checks");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "not collected",
+            Box::new(|v| {
+                v["schedule"]["trials"][0]["task_input"]["collect_outputs"] = false.into();
+            }),
+            "checks a file, but schedule.trials[TRIAL-GOOD-REPORT].task_input.collect_outputs is not true",
+        ),
+        (
+            "escaping path",
+            Box::new(|v| {
+                v["verifier"]["checks"]["TRIAL-GOOD-REPORT"][0]["path"] = "../etc/passwd".into();
+            }),
+            "must be relative to /workspace/output without '..'",
+        ),
+        (
+            "repeated criterion",
+            Box::new(|v| {
+                v["verifier"]["checks"]["TRIAL-GOOD-REPORT"][1]["criterion_id"] = "report-written".into();
+            }),
+            "criterion_id \"report-written\" is repeated",
+        ),
+        (
+            "zero artifact budget",
+            Box::new(|v| {
+                v["schedule"]["trials"][0]["budget"]["max_artifact_bytes"] = 0.into();
+            }),
+            "budget.max_artifact_bytes must be between 1 and runner.limits.max_artifact_bytes",
+        ),
+        (
+            "unknown check kind",
+            Box::new(|v| {
+                v["verifier"]["checks"]["TRIAL-GOOD-REPORT"][0]["kind"] = "file_smells_ok".into();
+            }),
+            "unknown variant `file_smells_ok`",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("report-files.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{}.json", name.replace(' ', "-")), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let message = stderr(&output);
+        assert!(
+            message.contains(expected),
+            "{name}: expected {expected:?} in {message}"
+        );
+    }
+}
+
+/// Real sandboxed file collection and file checks through the CLI.
+#[test]
+fn file_checks_judge_what_the_agent_wrote() {
+    let dir = TempDir::new("report-run");
+    let file = dir.file("eval.json", &load_example("report-files.json"));
+    let store = dir.0.join("store");
+    let output = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ],
+        &[],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status = workbench(
+        &["status", "EVAL-REPORT-FILES", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let report: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let outcome = |i: usize| {
+        let run = &report["trials"][i]["runs"][0];
+        (
+            run["verification_state"].as_str().unwrap().to_string(),
+            run["run_outcome"].as_str().unwrap().to_string(),
+        )
+    };
+    // Correct file -> pass. Wrong path (mandatory) + scratch file (minor) -> fail.
+    assert_eq!(outcome(0), ("verified_pass".into(), "pass".into()));
+    assert_eq!(outcome(1), ("mixed".into(), "fail".into()));
+    // Staged copies are cleaned up once recorded.
+    let staging = store.join("runner-artifacts");
+    assert_eq!(
+        fs::read_dir(&staging).unwrap().count(),
+        0,
+        "staging left behind"
+    );
 }

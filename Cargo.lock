@@ -276,8 +276,10 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

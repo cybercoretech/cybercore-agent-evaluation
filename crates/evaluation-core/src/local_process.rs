@@ -7,16 +7,18 @@
 //! adapter and an explicit artifact redaction policy.
 
 use crate::runner::{
-    ExecutionDisposition, ExecutionRequest, NetworkPolicy, ResourceUsage, Runner,
-    RunnerCapabilities, RunnerDescriptor, RunnerError, RunnerErrorKind, RunnerEvent, RunnerFailure,
-    RunnerFuture, RunnerResult, RunnerType, SideEffectPolicy,
+    ArtifactManifest, ExecutionDisposition, ExecutionRequest, NetworkPolicy, RedactionState,
+    ResourceUsage, Runner, RunnerCapabilities, RunnerDescriptor, RunnerError, RunnerErrorKind,
+    RunnerEvent, RunnerFailure, RunnerFuture, RunnerResult, RunnerType, SideEffectPolicy,
 };
+use crate::workspace_outputs::{artifact_staging_dir, collect_outputs};
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command as StdCommand, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +36,9 @@ const SANDBOX_PATH: &str = "/usr/bin:/bin";
 const MAX_CONFIGURED_WALL_TIME_MS: u64 = 3_600_000;
 const MAX_CONFIGURED_INPUT_FILES: usize = 1024;
 const MAX_CONFIGURED_ARGUMENT_BYTES: u64 = 512 * 1024;
+const MAX_CONFIGURED_OUTPUT_FILES: usize = 10_000;
+const MAX_CONFIGURED_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+const SANDBOX_OUTPUTS: &str = "/workspace/output";
 const MAX_SINGLE_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_INPUT_PATH_BYTES: usize = 4096;
 const MAX_INPUT_PATH_COMPONENT_BYTES: usize = 255;
@@ -63,6 +68,14 @@ pub struct LocalProcessRunnerConfig {
     pub max_input_files: usize,
     pub max_arguments: usize,
     pub max_argument_bytes: u64,
+    /// Host directory where files a task writes to `/workspace/output` are
+    /// staged after the run (only for tasks with `collect_outputs: true`).
+    /// `None` disables output collection.
+    pub artifact_root: Option<PathBuf>,
+    /// Ceiling for a request's `max_artifact_bytes` when collection is enabled.
+    pub max_artifact_bytes: u64,
+    /// Most files one run may leave in `/workspace/output`.
+    pub max_output_files: usize,
 }
 
 #[derive(Debug)]
@@ -79,6 +92,8 @@ pub struct LocalProcessRunner {
     max_argument_bytes: u64,
     max_workspace_bytes: u64,
     max_tmp_bytes: u64,
+    artifact_root: Option<PathBuf>,
+    max_output_files: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,6 +109,11 @@ pub struct LocalProcessTaskInput {
     /// Values are accepted only for keys in the runner's configured allowlist.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// Mount a per-run host directory read-write at `/workspace/output` and
+    /// collect the regular files left there as artifacts. Requires the runner's
+    /// `artifact_root` and a positive `max_artifact_bytes` budget.
+    #[serde(default)]
+    pub collect_outputs: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,6 +132,24 @@ struct TemporaryInputDirectory {
 impl Drop for TemporaryInputDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A run's `/workspace/output` host directory: written as `<hash>.partial`
+/// during the run, renamed to `<hash>` once its files are accepted.
+struct OutputStaging {
+    partial: PathBuf,
+    published: PathBuf,
+}
+
+impl OutputStaging {
+    fn publish(&self) -> Result<(), RunnerError> {
+        fs::rename(&self.partial, &self.published)
+            .map_err(|_| unavailable("could not publish collected workspace outputs"))
+    }
+
+    fn discard(&self) {
+        let _ = fs::remove_dir_all(&self.partial);
     }
 }
 
@@ -241,6 +279,32 @@ impl LocalProcessRunner {
             }
         }
 
+        let artifact_root = match &config.artifact_root {
+            None => None,
+            Some(root) => {
+                fs::create_dir_all(root)
+                    .map_err(|_| invalid("artifact_root could not be created"))?;
+                let root = fs::canonicalize(root)
+                    .map_err(|_| invalid("artifact_root could not be resolved"))?;
+                if !root.is_dir() {
+                    return Err(invalid("artifact_root must be a directory"));
+                }
+                if config.max_output_files == 0
+                    || config.max_output_files > MAX_CONFIGURED_OUTPUT_FILES
+                {
+                    return Err(invalid("max_output_files must be between 1 and 10000"));
+                }
+                if config.max_artifact_bytes == 0
+                    || config.max_artifact_bytes > MAX_CONFIGURED_ARTIFACT_BYTES
+                {
+                    return Err(invalid(
+                        "max_artifact_bytes must be between 1 byte and 1 GiB",
+                    ));
+                }
+                Some(root)
+            }
+        };
+
         preflight_bubblewrap(&bubblewrap_path)?;
 
         let descriptor = RunnerDescriptor {
@@ -255,8 +319,9 @@ impl LocalProcessRunner {
             supports_side_effect_allowlist: false,
             max_wall_time_ms: Some(config.max_wall_time_ms),
             max_output_bytes: Some(config.max_output_bytes),
-            // Workspace files are ephemeral and not currently exported as ArtifactManifest records.
-            max_artifact_bytes: None,
+            // Without an artifact root, workspace files are ephemeral and any
+            // collect_outputs request is rejected before launch.
+            max_artifact_bytes: artifact_root.as_ref().map(|_| config.max_artifact_bytes),
             max_tool_calls: None,
         };
 
@@ -273,6 +338,8 @@ impl LocalProcessRunner {
             max_argument_bytes: config.max_argument_bytes,
             max_workspace_bytes: config.max_workspace_bytes,
             max_tmp_bytes: config.max_tmp_bytes,
+            artifact_root,
+            max_output_files: config.max_output_files,
         })
     }
 
@@ -355,11 +422,43 @@ impl LocalProcessRunner {
         Ok(directory)
     }
 
+    fn prepare_output_staging(
+        &self,
+        request: &ExecutionRequest,
+    ) -> Result<OutputStaging, RunnerError> {
+        let root = self.artifact_root.as_ref().ok_or_else(|| {
+            invalid("task_input collect_outputs requires a runner configured with artifact_root")
+        })?;
+        if request.budget.max_artifact_bytes == 0 {
+            return Err(invalid(
+                "task_input collect_outputs requires a positive max_artifact_bytes budget",
+            ));
+        }
+        let published = artifact_staging_dir(root, &request.request_id);
+        if published.exists() {
+            return Err(invalid(
+                "outputs for this request_id were already collected",
+            ));
+        }
+        let mut partial = published.clone().into_os_string();
+        partial.push(".partial");
+        let partial = PathBuf::from(partial);
+        // A stale partial directory can only come from an earlier crash of
+        // this same request; it is ours to replace.
+        let _ = fs::remove_dir_all(&partial);
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&partial)
+            .map_err(|_| unavailable("could not create the output staging directory"))?;
+        Ok(OutputStaging { partial, published })
+    }
+
     fn build_command(
         &self,
         executable: &Path,
         task: &LocalProcessTaskInput,
         input_dir: &Path,
+        output_dir: Option<&Path>,
         workspace_bytes: u64,
         tmp_bytes: u64,
     ) -> Command {
@@ -380,7 +479,11 @@ impl LocalProcessRunner {
             .arg(SANDBOX_WORKSPACE)
             .arg("--ro-bind")
             .arg(input_dir)
-            .arg(SANDBOX_INPUTS)
+            .arg(SANDBOX_INPUTS);
+        if let Some(output_dir) = output_dir {
+            command.arg("--bind").arg(output_dir).arg(SANDBOX_OUTPUTS);
+        }
+        command
             .arg("--dir")
             .arg("/home")
             .arg("--dir")
@@ -443,10 +546,16 @@ impl LocalProcessRunner {
             .get(&task.executable_id)
             .ok_or_else(|| invalid("task_input executable_id is not allowlisted"))?;
         let input_directory = self.prepare_inputs(&task.files)?;
+        let output_staging = if task.collect_outputs {
+            Some(self.prepare_output_staging(request)?)
+        } else {
+            None
+        };
         let mut command = self.build_command(
             executable,
             &task,
             &input_directory.path,
+            output_staging.as_ref().map(|s| s.partial.as_path()),
             self.max_workspace_bytes,
             self.max_tmp_bytes,
         );
@@ -506,7 +615,7 @@ impl LocalProcessRunner {
         // A timeout wins over a simultaneous output-limit/exit event because the
         // wall-clock budget is the outer execution boundary.
         let timed_out = timed_out || elapsed_ms > request.budget.max_wall_time_ms;
-        let (disposition, failure, event_type) = if timed_out {
+        let (mut disposition, mut failure, mut event_type) = if timed_out {
             (ExecutionDisposition::TimedOut, None, "execution_timed_out")
         } else if output_limit_exceeded {
             (
@@ -542,6 +651,74 @@ impl LocalProcessRunner {
             )
         };
 
+        // Collect /workspace/output only when the process ended on its own:
+        // then the kernel has already killed and reaped everything in the
+        // sandbox's PID namespace, so nothing can change the files while the
+        // host reads them. After a kill, PID 1 dies asynchronously, so the
+        // files are discarded instead.
+        let mut artifacts = Vec::new();
+        let mut artifact_bytes = 0_u64;
+        let mut output_files = Vec::new();
+        let mut rejected_outputs = Vec::new();
+        let export = match &output_staging {
+            None => "not_requested".to_string(),
+            Some(staging) if timed_out || output_limit_exceeded || drain_timed_out => {
+                staging.discard();
+                "skipped_after_termination".to_string()
+            }
+            Some(staging) => match collect_outputs(
+                &staging.partial,
+                request.budget.max_artifact_bytes,
+                self.max_output_files,
+            ) {
+                Ok(collected) if collected.limit_exceeded.is_some() => {
+                    staging.discard();
+                    let reason = collected.limit_exceeded.unwrap_or_default();
+                    disposition = ExecutionDisposition::Errored;
+                    event_type = "execution_errored";
+                    failure = Some(RunnerFailure {
+                        code: "artifact_limit_exceeded".into(),
+                        message: format!("workspace outputs were discarded: {reason}"),
+                        retryable: false,
+                    });
+                    "discarded_over_limit".to_string()
+                }
+                Ok(collected) => {
+                    staging.publish()?;
+                    for file in &collected.files {
+                        artifacts.push(ArtifactManifest {
+                            artifact_id: file.path.clone(),
+                            content_type: "application/octet-stream".into(),
+                            byte_length: file.byte_length,
+                            sha256_hex: file.sha256_hex.clone(),
+                            redaction_state: RedactionState::NotRequired,
+                        });
+                        output_files.push(json!({
+                            "path": file.path,
+                            "byte_length": file.byte_length,
+                            "sha256": file.sha256_hex,
+                        }));
+                    }
+                    for (path, reason) in &collected.rejected {
+                        rejected_outputs.push(json!({"path": path, "reason": reason}));
+                    }
+                    artifact_bytes = collected.total_bytes;
+                    "collected".to_string()
+                }
+                Err(_) => {
+                    staging.discard();
+                    disposition = ExecutionDisposition::Errored;
+                    event_type = "execution_errored";
+                    failure = Some(RunnerFailure {
+                        code: "artifact_collection_failed".into(),
+                        message: "workspace outputs could not be read; they were discarded".into(),
+                        retryable: false,
+                    });
+                    "failed".to_string()
+                }
+            },
+        };
+
         let ended_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let executable_id = task.executable_id.clone();
         let output = json!({
@@ -555,7 +732,9 @@ impl LocalProcessRunner {
             "stdout_stderr_redaction": "not_implemented",
             "unmeasured_usage_fields": ["input_tokens", "output_tokens", "tool_calls"],
             "workspace_persisted": false,
-            "workspace_file_artifact_export": "not_implemented",
+            "workspace_file_artifact_export": export,
+            "workspace_output_files": output_files,
+            "rejected_output_entries": rejected_outputs,
         });
 
         // Keep the input directory alive until execution and output collection end.
@@ -583,11 +762,11 @@ impl LocalProcessRunner {
                     }),
                 },
             ],
-            artifacts: Vec::new(),
+            artifacts,
             resource_usage: ResourceUsage {
                 wall_time_ms: elapsed_ms,
                 output_bytes,
-                artifact_bytes: 0,
+                artifact_bytes,
                 input_tokens: 0,
                 output_tokens: 0,
                 tool_calls: 0,

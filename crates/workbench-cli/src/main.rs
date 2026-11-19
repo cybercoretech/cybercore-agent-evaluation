@@ -198,6 +198,21 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
             .map_err(|e| format!("task_revisions: {e}"))?;
     }
 
+    // The analysis plan is frozen before any trial runs (ADR-0021).
+    if let Some(declaration) = evaluation.plan_declaration() {
+        use cybercore_evaluation_store::analysis::{freeze_plan, FreezeOutcome};
+        match freeze_plan(&store, &evaluation.schedule, &declaration)
+            .map_err(|e| format!("analysis_plan: {e}"))?
+        {
+            FreezeOutcome::Frozen { plan_id, frozen_at } => {
+                say!("froze analysis plan {plan_id} at {frozen_at}")
+            }
+            FreezeOutcome::AlreadyFrozen { plan_id, frozen_at } => {
+                say!("analysis plan {plan_id} unchanged (frozen at {frozen_at})")
+            }
+        }
+    }
+
     let artifact_root = store_dir.join("runner-artifacts");
     let runner = evaluation
         .build_runner(store_dir.join("runner-tmp"), artifact_root.clone())
@@ -416,6 +431,34 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
             "not retried"
         },
     );
+    match &evaluation.analysis_plan {
+        None => say!("analysis    no plan declared (comparisons will be exploratory)"),
+        Some(plan) => {
+            say!(
+                "analysis    frozen at first run as {}: {}",
+                evaluation.schedule.plan_ref.record_id,
+                plan.decision_question.trim()
+            );
+            let family = plan.comparisons.len();
+            for c in &plan.comparisons {
+                say!(
+                    "            {}: vs {} at alpha {}{}, at least {} matched tasks{}",
+                    c.comparison_id,
+                    c.baseline_evaluation_id,
+                    c.alpha,
+                    if family > 1 {
+                        format!(" (Bonferroni over {family})")
+                    } else {
+                        String::new()
+                    },
+                    c.minimum_matched_tasks,
+                    c.practical_significance_threshold
+                        .map(|t| format!(", meaningful beyond ±{t}"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
     say!(
         "evidence    output evidence {}",
         if evaluation.store_output_evidence {

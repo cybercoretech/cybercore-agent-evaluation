@@ -48,6 +48,30 @@ EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
 - **Comparisons are paired by task.** They give the difference, a bootstrap interval and (for one trial per task) McNemar's exact test, and they're labelled exploratory. Evaluations over different task revisions are reported as **not comparable** rather than compared.
 - **Records:** each command records its result as `metric_result`, `analysis_result` or `comparison_result` records. Summarising unchanged results again writes nothing new.
 
+**Comparisons declared in advance ([ADR-0021](../../docs/decisions/0021-predeclared-comparisons.md)).** An evaluation file can declare the question it answers and the comparisons it will be judged by, before it runs:
+
+```json
+"analysis_plan": {
+  "decision_question": "Does agent B pass more tasks than agent A?",
+  "comparisons": [{
+    "comparison_id": "b-vs-a",
+    "baseline_evaluation_id": "EVAL-AGENT-A",
+    "alpha": 0.05,
+    "minimum_matched_tasks": 10,
+    "practical_significance_threshold": 0.1
+  }]
+}
+```
+
+- **Freezing:** `workbench run` freezes the plan as the schedule's `plan_ref` before the first trial runs. It can't change afterwards; a changed plan is refused, so give it a new `plan_ref` and `evaluation_ref`.
+- **When a comparison is confirmatory:** `workbench compare EVAL-AGENT-A EVAL-B` gives a **confirmatory** result only if three things hold:
+  - the plan was frozen before the treatment had any result;
+  - the comparison is comparable with an interval;
+  - the declared minimum of matched tasks is met.
+
+  Otherwise it stays exploratory and says why.
+- **The rule:** it's the declared one, applied unchanged. McNemar's exact test (or, with repeated tasks, the paired bootstrap interval) at `alpha`, split Bonferroni-style across the plan's comparisons. With a threshold, the difference is also judged meaningful, not meaningful, or uncertain.
+
 ## 📄 Evaluation files
 
 `evaluations/cat-smoke.json` is a complete example. Its top-level fields:

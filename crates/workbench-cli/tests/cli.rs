@@ -1176,3 +1176,180 @@ fn summary_and_compare_over_real_runs() {
         stderr(&unknown)
     );
 }
+
+fn declare(value: &mut Value, baseline: &str, alpha: f64) {
+    value["analysis_plan"] = serde_json::json!({
+        "decision_question": "Does the new agent pass more tasks than the baseline?",
+        "comparisons": [{
+            "comparison_id": "new-vs-base",
+            "baseline_evaluation_id": baseline,
+            "alpha": alpha,
+            "minimum_matched_tasks": 10,
+            "practical_significance_threshold": 0.2
+        }]
+    });
+}
+
+#[test]
+fn predeclared_comparisons_are_frozen_and_confirmatory() {
+    let dir = TempDir::new("predeclared");
+    let store = dir.0.join("store");
+    let env = [("WORKBENCH_STORE", store.as_path())];
+    let run = |name: &str, value: &Value| {
+        let file = dir.file(name, value);
+        workbench(&["run", file.to_str().unwrap()], &env)
+    };
+
+    let base = run("base.json", &twelve_task_evaluation("EVAL-BASE", 4));
+    if !base.status.success() && stderr(&base).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&base).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&base).trim()
+        );
+        return;
+    }
+    assert!(base.status.success(), "{}", stderr(&base));
+
+    // Declared before its first run: frozen, then confirmatory.
+    let mut treat = twelve_task_evaluation("EVAL-TREAT", 11);
+    declare(&mut treat, "EVAL-BASE", 0.05);
+    let output = run("treat.json", &treat);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("froze analysis plan PLAN-EVAL-TREAT"),
+        "{}",
+        stdout(&output)
+    );
+    let rerun = run("treat.json", &treat);
+    assert!(
+        stdout(&rerun).contains("analysis plan PLAN-EVAL-TREAT unchanged"),
+        "{}",
+        stdout(&rerun)
+    );
+
+    let compare = workbench(&["compare", "EVAL-BASE", "EVAL-TREAT", "--json"], &env);
+    assert!(compare.status.success(), "{}", stderr(&compare));
+    let report: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    let c = &report["comparison"];
+    assert_eq!(c["inferential_status"], "confirmatory", "{report:#}");
+    assert_eq!(c["declared_comparison_id"], "new-vs-base");
+    assert_eq!(c["direction"], "favors_treatment");
+    assert_eq!(c["practical_significance"], "meaningful");
+    let text = workbench(&["compare", "EVAL-BASE", "EVAL-TREAT"], &env);
+    assert!(
+        stdout(&text).contains("inference   confirmatory (predeclared as new-vs-base)"),
+        "{}",
+        stdout(&text)
+    );
+
+    // A frozen plan cannot change.
+    declare(&mut treat, "EVAL-BASE", 0.01);
+    let changed = run("treat-changed.json", &treat);
+    assert_eq!(changed.status.code(), Some(1));
+    assert!(
+        stderr(&changed).contains("was frozen at") && stderr(&changed).contains("cannot change"),
+        "{}",
+        stderr(&changed)
+    );
+
+    // Declared only after results existed: stays exploratory, with the reason.
+    let late = twelve_task_evaluation("EVAL-LATE", 11);
+    assert!(run("late.json", &late).status.success());
+    let mut late_declared = late;
+    declare(&mut late_declared, "EVAL-BASE", 0.05);
+    assert!(run("late-declared.json", &late_declared).status.success());
+    let compare = workbench(&["compare", "EVAL-BASE", "EVAL-LATE", "--json"], &env);
+    let report: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    assert_eq!(
+        report["comparison"]["inferential_status"], "exploratory",
+        "{report:#}"
+    );
+    let notes = report["comparison"]["limitations"].to_string();
+    assert!(
+        notes.contains("not confirmatory") && notes.contains("already had results"),
+        "{notes}"
+    );
+}
+
+#[test]
+fn analysis_plans_are_validated() {
+    let dir = TempDir::new("plan-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "alpha",
+            Box::new(|v| v["analysis_plan"]["comparisons"][0]["alpha"] = 0.5.into()),
+            "analysis_plan.comparisons[0].alpha must be greater than 0 and at most 0.2",
+        ),
+        (
+            "minimum",
+            Box::new(|v| v["analysis_plan"]["comparisons"][0]["minimum_matched_tasks"] = 3.into()),
+            "minimum_matched_tasks must be at least 5",
+        ),
+        (
+            "self",
+            Box::new(|v| {
+                v["analysis_plan"]["comparisons"][0]["baseline_evaluation_id"] = "EVAL-TREAT".into()
+            }),
+            "must be another evaluation",
+        ),
+        (
+            "question",
+            Box::new(|v| v["analysis_plan"]["decision_question"] = " ".into()),
+            "decision_question must be 1 to 4096 characters",
+        ),
+        (
+            "selection",
+            Box::new(|v| v["analysis_plan"]["task_selection_method"] = "vibes".into()),
+            "task_selection_method must be one of",
+        ),
+        (
+            "fingerprints",
+            Box::new(|v| {
+                v["schedule"]["trials"][1]["system_fingerprint_ref"]["record_id"] =
+                    "FP-OTHER".into()
+            }),
+            "share one system_fingerprint_ref",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = twelve_task_evaluation("EVAL-TREAT", 11);
+        declare(&mut value, "EVAL-BASE", 0.05);
+        mutate(&mut value);
+        let file = dir.file(&format!("{name}.json"), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            stderr(&output).contains(expected),
+            "{name}: expected {expected:?} in {}",
+            stderr(&output)
+        );
+    }
+    let mut ok = twelve_task_evaluation("EVAL-TREAT", 11);
+    declare(&mut ok, "EVAL-BASE", 0.05);
+    let file = dir.file("ok.json", &ok);
+    let plan = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--dry-run",
+            "--store",
+            dir.0.join("s").to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(stdout(&plan).contains("new-vs-base: vs EVAL-BASE at alpha 0.05, at least 10 matched tasks, meaningful beyond ±0.2"), "{}", stdout(&plan));
+}

@@ -88,6 +88,20 @@
     ],
     "decision_gates": [
       "All mandatory criteria must pass."
+    ],
+    "comparisons": [
+      {
+        "comparison_id": "candidate-vs-baseline",
+        "metric_id": "METRIC-PASS",
+        "baseline_condition_id": "baseline",
+        "treatment_condition_id": "candidate",
+        "design": "blocked_paired",
+        "hypothesis": "two_sided",
+        "alpha": 0.05,
+        "multiplicity_method": "none_predeclared_single_test",
+        "minimum_matched_units": 10,
+        "practical_significance_threshold": 0.05
+      }
     ]
   },
   "budgets": {

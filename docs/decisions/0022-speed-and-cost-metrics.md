@@ -63,4 +63,4 @@ Summaries reported only the pass rate. A faster, cheaper agent with the same pas
   - CPU time and memory peaks;
   - retried attempts' usage (only the latest attempt counts);
   - predeclared speed and cost comparisons;
-  - the pass-rate record's `denominator` still counts trials without a verdict, while `observed_trial_count` doesn't. The domain invariants expect these to match; this is left for a separate change.
+  - the pass-rate record's `denominator` still counts trials without a verdict, while `observed_trial_count` doesn't. The domain invariants expect these to match; ADR-0023 fixes this.

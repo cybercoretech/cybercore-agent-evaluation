@@ -32,14 +32,18 @@ pub use resources::{
 };
 
 pub const METRIC_ID: &str = "workbench-pass-rate";
-pub const ANALYSIS_VERSION: &str = "workbench-analysis/2";
+pub const ANALYSIS_VERSION: &str = "workbench-analysis/3";
 pub const CONFIDENCE_LEVEL: f64 = 0.95;
 /// Below this many trials with an outcome, results are descriptive only.
 pub const MIN_OBSERVATIONS: u64 = 10;
 /// Fewest distinct tasks for a bootstrap interval; resampling one or two
 /// clusters would report a falsely narrow (even zero-width) interval.
 pub const MIN_BOOTSTRAP_TASKS: usize = 5;
-const METRIC_RECORD_ID: &str = "METRIC-WORKBENCH-PASS-RATE-R1";
+const METRIC_RECORD_ID: &str = "METRIC-WORKBENCH-PASS-RATE-R2";
+/// Revision 1 recorded trials without a verdict as missing while counting
+/// them in the denominator. Same estimate and rule; plans frozen under it
+/// stay valid.
+const LEGACY_METRIC_RECORD_ID: &str = "METRIC-WORKBENCH-PASS-RATE-R1";
 const Z_95: f64 = 1.959_963_984_540_054;
 const BOOTSTRAP_REPLICATES: usize = 10_000;
 const SCHEMA_VERSION: &str = "0.1.0";
@@ -749,8 +753,11 @@ pub fn record_summary(
                 "planned_trial_count": rate.planned,
                 "eligible_trial_count": rate.planned - rate.excluded - rate.not_run,
                 "excluded_trial_count": rate.excluded,
-                "observed_trial_count": rate.with_verdict,
-                "missing_trial_count": rate.without_verdict,
+                // Trials without a verdict are observed as not passed, so
+                // the denominator is the observed count and nothing is
+                // missing (the number without a verdict is in limitations).
+                "observed_trial_count": rate.denominator,
+                "missing_trial_count": 0,
                 "run_attempt_count": rate.attempts,
                 "pending_trial_count": rate.not_run,
             },
@@ -1088,7 +1095,10 @@ pub fn freeze_plan(
     let content_digest = digest(&body);
     if let Some(existing) = meta.get_record(&plan_id)? {
         let frozen_at = existing["frozen_at"].as_str().unwrap_or("").to_string();
-        if existing["content_digest"] == content_digest.as_str() {
+        let legacy = with_metric_ref(&body, LEGACY_METRIC_RECORD_ID);
+        if existing["content_digest"] == content_digest.as_str()
+            || existing["content_digest"] == digest(&legacy).as_str()
+        {
             return Ok(FreezeOutcome::AlreadyFrozen { plan_id, frozen_at });
         }
         return Err(StoreError::InvalidRecord(format!(
@@ -1110,6 +1120,13 @@ pub fn freeze_plan(
     Ok(FreezeOutcome::Frozen { plan_id, frozen_at })
 }
 
+/// A plan body that names a different pass-rate metric definition.
+fn with_metric_ref(body: &Value, record_id: &str) -> Value {
+    let mut body = body.clone();
+    body["metrics"][0]["definition_ref"]["record_id"] = json!(record_id);
+    body
+}
+
 fn metric_definition() -> Value {
     json!({
         "record_id": METRIC_RECORD_ID,
@@ -1127,7 +1144,7 @@ fn metric_definition() -> Value {
             "capture_version": "1"
         },
         "metric_id": METRIC_ID,
-        "revision": 1,
+        "revision": 2,
         "lifecycle_state": "active",
         "name": "Workbench pass rate",
         "description": "Proportion of planned trials whose latest attempt was independently verified as pass.",
@@ -1140,7 +1157,7 @@ fn metric_definition() -> Value {
         "numerator_definition": "Trials whose latest attempt's run_outcome is pass.",
         "denominator_definition": "Trials whose latest attempt is pass, fail, inconclusive or not_scored; invalid runs are excluded and trials not run yet are pending.",
         "eligibility_rule": ELIGIBILITY_POLICY,
-        "missing_data_policy": "Trials without a verdict (inconclusive or not scored) count as not passed; their number is reported as missing_trial_count.",
+        "missing_data_policy": "Trials without a verdict (inconclusive or not scored) are observed as not passed, so missing_trial_count is 0; their number is stated in the result's limitations.",
         "uncertainty_policy": {
             "required_for_inference": true,
             "method": "wilson",

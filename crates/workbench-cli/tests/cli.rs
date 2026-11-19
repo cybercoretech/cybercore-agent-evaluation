@@ -1353,3 +1353,230 @@ fn analysis_plans_are_validated() {
     );
     assert!(stdout(&plan).contains("new-vs-base: vs EVAL-BASE at alpha 0.05, at least 10 matched tasks, meaningful beyond ±0.2"), "{}", stdout(&plan));
 }
+
+/// Twelve tasks whose "agent" answers correctly and reports `tokens_scale`
+/// times a base usage in `cybercore-usage.json` (ADR-0022).
+fn usage_evaluation(id: &str, tokens_scale: u64) -> Value {
+    let mut value = twelve_task_evaluation(id, 12);
+    value["runner"]["allowed_executables"] = serde_json::json!({"sh": "/usr/bin/sh"});
+    value["runner"]["limits"]["max_artifact_bytes"] = 65536.into();
+    value["runner"]["limits"]["max_output_files"] = 4.into();
+    for (i, trial) in value["schedule"]["trials"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        let i = i as u64;
+        let usage = format!(
+            r#"{{"format":"cybercore-usage/v0","models":[{{"model_id":"model-a","input_tokens":{},"output_tokens":{}}}],"tool_calls":3}}"#,
+            (1000 + i * 100) * tokens_scale,
+            (200 + i * 10) * tokens_scale
+        );
+        trial["task_input"]["executable_id"] = "sh".into();
+        trial["task_input"]["args"] = serde_json::json!([
+            "-c",
+            format!("printf 'answer {i}\\n'; printf '%s' '{usage}' > /workspace/output/cybercore-usage.json")
+        ]);
+        trial["task_input"]["collect_outputs"] = true.into();
+        trial["budget"]["max_artifact_bytes"] = 65536.into();
+    }
+    value["pricing"] = serde_json::json!({
+        "currency": "USD",
+        "models": {"model-a": {"input_per_million_tokens": 3.0, "output_per_million_tokens": 15.0}}
+    });
+    value
+}
+
+#[test]
+fn speed_and_cost_metrics_over_real_runs() {
+    let dir = TempDir::new("usage");
+    let store = dir.0.join("store");
+    for (id, scale) in [("EVAL-COSTLY", 2), ("EVAL-LEAN", 1)] {
+        let file = dir.file(&format!("{id}.json"), &usage_evaluation(id, scale));
+        let output = workbench(
+            &["run", file.to_str().unwrap()],
+            &[("WORKBENCH_STORE", &store)],
+        );
+        if !output.status.success() && stderr(&output).contains("runner:") {
+            assert!(
+                std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+                "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+                stderr(&output).trim()
+            );
+            eprintln!(
+                "SKIPPED: Bubblewrap is unavailable here: {}",
+                stderr(&output).trim()
+            );
+            return;
+        }
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+
+    let summary = workbench(
+        &["summary", "EVAL-LEAN", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(summary.status.success(), "{}", stderr(&summary));
+    let lean: Value = serde_json::from_str(&stdout(&summary)).unwrap();
+    assert_eq!(lean["status"], "computed");
+    assert_eq!(lean["attempts"], 12, "each run is counted once");
+    let metrics = lean["speed_and_cost"].as_array().unwrap();
+    let [time, tokens, cost] = [&metrics[0], &metrics[1], &metrics[2]];
+    assert_eq!(time["metric_id"], "workbench-wall-time");
+    assert_eq!(time["status"], "computed", "{time}");
+    assert!(time["estimate"].as_f64().unwrap() > 0.0);
+    assert_eq!(time["self_reported"], false);
+    // Tokens per trial: 1000 + 100i input and 200 + 10i output, i = 0..11.
+    assert_eq!(tokens["status"], "computed", "{tokens}");
+    assert_eq!(tokens["estimate"].as_f64(), Some(1200.0 + 110.0 * 5.5));
+    assert_eq!(tokens["observed"], 12);
+    assert_eq!(tokens["self_reported"], true);
+    // Cost: 3 µ$ per input token and 15 µ$ per output token.
+    let expected_total: f64 = (0..12)
+        .map(|i| (1000.0 + 100.0 * i as f64) * 3.0 + (200.0 + 10.0 * i as f64) * 15.0)
+        .sum();
+    assert_eq!(cost["status"], "computed", "{cost}");
+    assert_eq!(cost["currency"], "USD");
+    assert_eq!(cost["total"].as_f64(), Some(expected_total));
+    assert!(cost["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l.as_str().unwrap().contains("not a bill")));
+
+    let text = workbench(&["summary", "EVAL-LEAN"], &[("WORKBENCH_STORE", &store)]);
+    let text = stdout(&text);
+    assert!(text.contains("wall time   median"), "{text}");
+    assert!(text.contains("tokens      mean 1805 tokens"), "{text}");
+    assert!(text.contains("self-reported"), "{text}");
+    assert!(
+        text.contains(&format!("total {:.4} USD", expected_total / 1e6)),
+        "{text}"
+    );
+
+    let compare = workbench(
+        &["compare", "EVAL-COSTLY", "EVAL-LEAN", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(compare.status.success(), "{}", stderr(&compare));
+    let out: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    let resources = out["speed_and_cost"].as_array().unwrap();
+    assert_eq!(resources.len(), 3);
+    for c in &resources[1..] {
+        assert_eq!(c["status"], "comparable", "{c}");
+        assert_eq!(c["direction"], "favors_treatment", "{c}");
+        assert_eq!(c["inferential_status"], "exploratory");
+        assert!((c["relative_difference"].as_f64().unwrap() + 0.5).abs() < 1e-9);
+        assert!(c["comparison_result_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("CR-"));
+    }
+    // Repeating the command writes nothing new.
+    let again = workbench(
+        &["compare", "EVAL-COSTLY", "EVAL-LEAN", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let again: Value = serde_json::from_str(&stdout(&again)).unwrap();
+    assert_eq!(again["speed_and_cost"], out["speed_and_cost"]);
+
+    // Missing and invalid reports are counted, never imputed.
+    let mut patchy = usage_evaluation("EVAL-PATCHY", 1);
+    patchy["schedule"]["trials"][0]["task_input"]["args"][1] =
+        "printf 'answer 0\\n'; printf 'not json' > /workspace/output/cybercore-usage.json".into();
+    patchy["schedule"]["trials"][1]["task_input"]["args"][1] = "printf 'answer 1\\n'".into();
+    let file = dir.file("patchy.json", &patchy);
+    let output = workbench(
+        &["run", file.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary = workbench(
+        &["summary", "EVAL-PATCHY", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let patchy: Value = serde_json::from_str(&stdout(&summary)).unwrap();
+    let tokens = &patchy["speed_and_cost"][1];
+    assert_eq!(
+        (tokens["observed"].as_u64(), tokens["missing"].as_u64()),
+        (Some(10), Some(2))
+    );
+    assert_eq!(tokens["status"], "descriptive_only");
+    assert!(tokens["limitations"].as_array().unwrap().iter().any(|l| l
+        .as_str()
+        .unwrap()
+        .contains("1 left no usage report and 1 left an invalid one")));
+}
+
+#[test]
+fn pricing_is_validated() {
+    let dir = TempDir::new("pricing-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "currency",
+            Box::new(|v| v["pricing"]["currency"] = "dollars".into()),
+            "pricing: currency must be three capital letters",
+        ),
+        (
+            "negative",
+            Box::new(|v| {
+                v["pricing"]["models"]["model-a"]["input_per_million_tokens"] = (-1.0).into()
+            }),
+            "pricing: model-a.input_per_million_tokens must be between 0 and 10000",
+        ),
+        (
+            "unknown",
+            Box::new(|v| v["pricing"]["models"]["model-a"]["api_key"] = "x".into()),
+            "unknown field `api_key`",
+        ),
+        (
+            "no-outputs",
+            Box::new(|v| {
+                for trial in v["schedule"]["trials"].as_array_mut().unwrap() {
+                    trial["task_input"]["collect_outputs"] = false.into();
+                }
+            }),
+            "pricing is set, but no trial sets task_input.collect_outputs",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = usage_evaluation("EVAL-PRICED", 1);
+        mutate(&mut value);
+        let file = dir.file(&format!("{name}.json"), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            stderr(&output).contains(expected),
+            "{name}: expected {expected:?} in {}",
+            stderr(&output)
+        );
+    }
+    let file = dir.file("ok.json", &usage_evaluation("EVAL-PRICED", 1));
+    let plan = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--dry-run",
+            "--store",
+            dir.0.join("s").to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(plan.status.success(), "{}", stderr(&plan));
+    assert!(
+        stdout(&plan).contains("pricing     model-a: USD 3 input / 15 output per million tokens"),
+        "{}",
+        stdout(&plan)
+    );
+    assert!(stdout(&plan).contains("cybercore-usage.json (recorded as self-reported)"));
+}

@@ -72,6 +72,37 @@ EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
   Otherwise it stays exploratory and says why.
 - **The rule:** it's the declared one, applied unchanged. McNemar's exact test (or, with repeated tasks, the paired bootstrap interval) at `alpha`, split Bonferroni-style across the plan's comparisons. With a threshold, the difference is also judged meaningful, not meaningful, or uncertain.
 
+## ⏱️ Speed and cost
+
+`workbench summary` also reports how long each trial took and, when the agent says so, how many tokens it used and what that cost ([ADR-0022](../../docs/decisions/0022-speed-and-cost-metrics.md)). `workbench compare` pairs them by task.
+
+```
+  wall time   median 108 ms   95% interval 107 ms – 113 ms   p90 138 ms   (12 of 12 trial(s); computed)
+  tokens      mean 1805 tokens   95% interval 1585 tokens – 2016 tokens   total 21660 tokens   (12 of 12 trial(s), self-reported; computed)
+  cost        mean 0.0085 USD   95% interval 0.0076 USD – 0.0093 USD   total 0.1017 USD   (12 of 12 trial(s), self-reported; computed)
+```
+
+- **Wall time is measured** by the runner, for every trial with an outcome (failed attempts take time too). It's summarised by its median and 90th percentile.
+- **Tokens are self-reported.** The workbench can't see inside an agent's encrypted model-API traffic. Instead, an agent may write `/workspace/output/cybercore-usage.json` (the trial needs `task_input.collect_outputs: true`):
+
+  ```json
+  {"format": "cybercore-usage/v0",
+   "models": [{"model_id": "claude-sonnet-5-5", "input_tokens": 12000, "output_tokens": 3400}],
+   "tool_calls": 7}
+  ```
+
+  The run records it as `agent_report.reported_usage` with `source: agent_self_reported`, never as a measurement, and every summary says so. An invalid file is recorded as invalid with a reason the workbench writes (agent text is never copied).
+- **Cost comes from prices you declare.** The evaluation file's `pricing` holds prices per million tokens for each model ID agents report:
+
+  ```json
+  "pricing": {"currency": "USD", "models": {
+    "claude-sonnet-5-5": {"input_per_million_tokens": 3.0, "output_per_million_tokens": 15.0}}}
+  ```
+
+  Cost is recorded in millionths of the currency, together with a digest of the price table. A report naming an unpriced model gets no cost. Costs made under different price tables are never pooled or compared. It's an estimate, not a bill.
+- **Missing values are counted, never filled in.** A trial without a measured time, without a usage report, or with an invalid or unpriced one counts as missing and keeps the result "descriptive only". Only each trial's latest attempt counts.
+- **Comparisons** give the mean per-task difference (treatment − baseline), the relative change and a paired bootstrap interval. Lower is better. They're always exploratory; this revision can't declare them in advance.
+
 ## 📄 Evaluation files
 
 `evaluations/cat-smoke.json` is a complete example. Its top-level fields:
@@ -85,6 +116,7 @@ EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
 | `project_ref` | the project the output evidence belongs to |
 | `store_output_evidence` | `true` stores each runner output as evidence. Only use it for non-sensitive tasks: the local runner does not redact. |
 | `task_revisions` | optional `task_revision` records stored before the run. Their criteria's `criticality` (mandatory, major or minor) and `required_criterion_ids` decide each run's outcome ([ADR-0013](../../docs/decisions/0013-concurrency-and-outcome-rules.md)). |
+| `pricing` | optional token prices per model, for costing agent-reported usage (see **Speed and cost** above). Requires at least one trial with `task_input.collect_outputs`. |
 
 Unknown fields are rejected, and every error names the file and the field.
 

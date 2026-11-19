@@ -23,7 +23,7 @@ Digest fields currently validate SHA-256 syntax only. The canonical serializatio
 | `evaluation/evaluation-plan.schema.json` | `evaluation_plan` | Experiment design and frozen sampling policy; optional `analysis_plan.comparisons` predeclare pairwise comparisons (ADR-0021) |
 | `evaluation/evaluation.schema.json` | `evaluation` | Campaign lifecycle and progress projection |
 | `evaluation/trial.schema.json` | `trial` | Planned sampling unit |
-| `evaluation/run.schema.json` | `run` | Actual execution attempt |
+| `evaluation/run.schema.json` | `run` | Actual execution attempt; optional `agent_report.reported_usage` holds agent-reported tokens and their declared-price cost (ADR-0022) |
 | `evaluation/run-event.schema.json` | `run_event` | Ordered observable event |
 | `verification/verification-result.schema.json` | `verification_result` | Criterion-specific independent verification |
 | `evidence/evidence-artifact.schema.json` | `evidence_artifact` | Evidence object metadata and availability state |

@@ -13,6 +13,7 @@ use crate::error::{StoreError, StoreResult};
 use crate::local::LocalStore;
 use crate::metadata::now;
 use crate::scheduler::{Command, DurableScheduler, INTERRUPTED_ATTEMPT_MESSAGE};
+use crate::usage::{reported_usage, Pricing, USAGE_FILE};
 use cybercore_evaluation_core::{
     artifact_staging_dir, ArtifactManifest, AttemptIdentity, AttemptStatus, ExecutionDisposition,
     RecordReference, Runner, RunnerError, RunnerErrorKind, RunnerResult, RunnerType,
@@ -262,6 +263,8 @@ pub struct RunRecorderConfig {
     /// The runner's `artifact_root`, where collected workspace files are
     /// staged. `None` when the runner does not collect outputs.
     pub artifact_root: Option<PathBuf>,
+    /// Declared prices for costing agent-reported usage (ADR-0022).
+    pub pricing: Option<Pricing>,
 }
 
 impl RunRecorderConfig {
@@ -279,12 +282,19 @@ impl RunRecorderConfig {
             project_ref,
             store_output_evidence,
             artifact_root: None,
+            pricing: None,
         }
     }
 
     /// Where the runner stages collected workspace files.
     pub fn with_artifact_root(mut self, artifact_root: impl Into<PathBuf>) -> Self {
         self.artifact_root = Some(artifact_root.into());
+        self
+    }
+
+    /// Prices for turning agent-reported token counts into a cost.
+    pub fn with_pricing(mut self, pricing: Pricing) -> Self {
+        self.pricing = Some(pricing);
         self
     }
 }
@@ -736,7 +746,7 @@ impl LocalStore {
             "execution_status": execution_status(attempt.status),
             "run_outcome": run_outcome,
             "verification_state": verification_state,
-            "agent_report": {"completion_claim": "no_claim"},
+            "agent_report": agent_report(files.get(USAGE_FILE), config.pricing.as_ref()),
             "event_refs": event_refs,
             "evidence_refs": evidence_refs,
             "verification_refs": verification_refs,
@@ -790,6 +800,16 @@ impl LocalStore {
         }
         Ok(())
     }
+}
+
+/// The run's `agent_report`: no completion claim, plus the agent's usage
+/// report when it left one in its collected outputs (ADR-0022).
+fn agent_report(usage_file: Option<&Vec<u8>>, pricing: Option<&Pricing>) -> Value {
+    let mut report = json!({"completion_claim": "no_claim"});
+    if let (Some(bytes), Some(map)) = (usage_file, report.as_object_mut()) {
+        map.insert("reported_usage".into(), reported_usage(bytes, pricing));
+    }
+    report
 }
 
 /// How much a criterion matters, from a task revision's acceptance criteria.

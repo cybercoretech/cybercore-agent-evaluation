@@ -7,6 +7,7 @@ use cybercore_evaluation_core::{
 };
 use cybercore_evaluation_judge::{Inspect, JudgeCriterion, ModelJudgeConfig, ModelJudgeVerifier};
 use cybercore_evaluation_store::analysis::{ComparisonDeclaration, PlanDeclaration};
+use cybercore_evaluation_store::usage::{ModelPrice, Pricing};
 use cybercore_evaluation_store::{
     Check, ChecksVerifier, CompositeVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
 };
@@ -42,6 +43,27 @@ pub struct EvaluationFile {
     /// `plan_ref` before the first trial runs, and never changed after.
     #[serde(default)]
     pub analysis_plan: Option<AnalysisPlanSpec>,
+    /// Prices for the tokens agents report in `cybercore-usage.json`
+    /// (ADR-0022). Never a secret; costs are estimates, not bills.
+    #[serde(default)]
+    pub pricing: Option<PricingSpec>,
+}
+
+/// Declared token prices, in one currency.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PricingSpec {
+    /// Three capital letters, for example `USD`.
+    pub currency: String,
+    /// Model ID (as agents report it) → price per million tokens.
+    pub models: BTreeMap<String, ModelPriceSpec>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelPriceSpec {
+    pub input_per_million_tokens: f64,
+    pub output_per_million_tokens: f64,
 }
 
 /// The decision this evaluation informs, and the comparisons it declares in
@@ -574,7 +596,33 @@ impl EvaluationFile {
         if let Some(plan) = &self.analysis_plan {
             self.check_analysis_plan(plan)?;
         }
+        if self.pricing()?.is_some() && !self.collects_outputs() {
+            return Err("pricing is set, but no trial sets task_input.collect_outputs, so no usage report (cybercore-usage.json) can be read".into());
+        }
         Ok(())
+    }
+
+    /// The validated prices, if the file declares any.
+    pub fn pricing(&self) -> Result<Option<Pricing>, String> {
+        let Some(spec) = &self.pricing else {
+            return Ok(None);
+        };
+        let models = spec
+            .models
+            .iter()
+            .map(|(model, price)| {
+                (
+                    model.clone(),
+                    ModelPrice {
+                        input_per_million_tokens: price.input_per_million_tokens,
+                        output_per_million_tokens: price.output_per_million_tokens,
+                    },
+                )
+            })
+            .collect();
+        Pricing::new(&spec.currency, models)
+            .map(Some)
+            .map_err(|e| format!("pricing: {e}"))
     }
 
     fn check_analysis_plan(&self, plan: &AnalysisPlanSpec) -> Result<(), String> {

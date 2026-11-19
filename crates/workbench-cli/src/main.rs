@@ -26,6 +26,7 @@ mod summary;
 
 use clap::{Parser, Subcommand};
 use cybercore_evaluation_core::{AttemptIdentity, EvaluationSchedule, RecordReference};
+use cybercore_evaluation_store::usage::USAGE_FILE;
 use cybercore_evaluation_store::{
     run_ready_trials, ContractValidator, DurableScheduler, LocalStore, OutcomePolicy, PutOutcome,
     RunRecorderConfig,
@@ -224,6 +225,9 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
     );
     if evaluation.collects_outputs() {
         config = config.with_artifact_root(artifact_root);
+    }
+    if let Some(pricing) = evaluation.pricing()? {
+        config = config.with_pricing(pricing);
     }
     let verifier = evaluation.verifier();
 
@@ -457,6 +461,19 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
                         .unwrap_or_default()
                 );
             }
+        }
+    }
+    if evaluation.collects_outputs() {
+        say!("usage       agents may report tokens in /workspace/output/{USAGE_FILE} (recorded as self-reported)");
+    }
+    if let Some(spec) = &evaluation.pricing {
+        for (model, price) in &spec.models {
+            say!(
+                "pricing     {model}: {} {} input / {} output per million tokens",
+                spec.currency,
+                price.input_per_million_tokens,
+                price.output_per_million_tokens
+            );
         }
     }
     say!(

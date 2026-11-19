@@ -25,8 +25,14 @@ use cybercore_evaluation_core::EvaluationSchedule;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod resources;
+pub use resources::{
+    compare_resources, record_resource_comparisons, resource_summaries, resource_summary,
+    ResourceComparison, ResourceMetric, ResourceSummary,
+};
+
 pub const METRIC_ID: &str = "workbench-pass-rate";
-pub const ANALYSIS_VERSION: &str = "workbench-analysis/1";
+pub const ANALYSIS_VERSION: &str = "workbench-analysis/2";
 pub const CONFIDENCE_LEVEL: f64 = 0.95;
 /// Below this many trials with an outcome, results are descriptive only.
 pub const MIN_OBSERVATIONS: u64 = 10;
@@ -60,6 +66,68 @@ pub struct TrialResult {
     pub task_id: String,
     pub outcome: TrialOutcome,
     pub attempts: u64,
+    /// The latest attempt's measured wall time.
+    pub wall_time_ms: Option<u64>,
+    /// The latest attempt's agent-reported usage (ADR-0022).
+    pub usage: ReportedUsage,
+}
+
+/// What a run's agent reported about its own usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportedUsage {
+    /// No usage file (or no collected outputs).
+    Absent,
+    /// A usage file the workbench could not accept.
+    Invalid,
+    Reported {
+        /// Input plus output tokens.
+        tokens: u64,
+        /// Present when every reported model was priced.
+        cost: Option<ReportedCost>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedCost {
+    pub microunits: u64,
+    pub currency: String,
+    pub pricing_digest: String,
+}
+
+impl ReportedUsage {
+    fn from_run(run: Option<&Value>) -> Self {
+        let Some(report) = run.map(|r| &r["agent_report"]["reported_usage"]) else {
+            return Self::Absent;
+        };
+        match report["report_status"].as_str() {
+            Some("reported") => {
+                let (Some(input), Some(output)) = (
+                    report["input_tokens"].as_u64(),
+                    report["output_tokens"].as_u64(),
+                ) else {
+                    return Self::Invalid;
+                };
+                let cost = match (
+                    report["cost_microunits"].as_u64(),
+                    report["currency"].as_str(),
+                    report["pricing_digest"].as_str(),
+                ) {
+                    (Some(microunits), Some(currency), Some(digest)) => Some(ReportedCost {
+                        microunits,
+                        currency: currency.to_string(),
+                        pricing_digest: digest.to_string(),
+                    }),
+                    _ => None,
+                };
+                Self::Reported {
+                    tokens: input + output,
+                    cost,
+                }
+            }
+            Some(_) => Self::Invalid,
+            None => Self::Absent,
+        }
+    }
 }
 
 /// Everything a summary needs about one evaluation, read from the store.
@@ -88,8 +156,11 @@ impl EvaluationOutcomes {
             StoreError::InvalidRecord(format!("unknown evaluation {evaluation_id}"))
         })?;
         let mut runs: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        // A run refers to its evaluation from more than one field, so the
+        // index lists it more than once: count each run once.
+        let mut seen = BTreeSet::new();
         for reference in meta.references_to(evaluation_id)? {
-            if reference.source_type != "run" {
+            if reference.source_type != "run" || !seen.insert(reference.source_id.clone()) {
                 continue;
             }
             if let Some(run) = meta.get_record(&reference.source_id)? {
@@ -121,6 +192,9 @@ impl EvaluationOutcomes {
                     task_id: trial.task_revision_ref.record_id.clone(),
                     outcome,
                     attempts: attempts.len() as u64,
+                    wall_time_ms: latest
+                        .and_then(|run| run["resource_usage"]["wall_time_ms"].as_u64()),
+                    usage: ReportedUsage::from_run(latest),
                 }
             })
             .collect::<Vec<_>>();
@@ -195,7 +269,9 @@ impl EvaluationOutcomes {
                     t.trial_id,
                     t.task_id,
                     format!("{:?}", t.outcome),
-                    t.attempts
+                    t.attempts,
+                    t.wall_time_ms,
+                    format!("{:?}", t.usage),
                 ])
             })
             .collect();
@@ -626,6 +702,8 @@ fn apply_declared(
 pub struct SummaryRecords {
     pub metric_result_id: String,
     pub analysis_result_id: String,
+    /// Speed and cost metric results, in [`ResourceMetric::ALL`] order.
+    pub resource_metric_result_ids: Vec<String>,
 }
 
 /// Writes the metric definition (once), a `metric_result` and an
@@ -644,6 +722,7 @@ pub fn record_summary(
     let tag = &outcomes.data_digest()[..24];
     let metric_result_id = format!("MR-{tag}");
     let analysis_result_id = format!("AR-{tag}");
+    let resource_metric_result_ids = resources::record_resource_results(store, outcomes, tag)?;
     if meta.get_record(&metric_result_id)?.is_none() {
         let now = now();
         let population_key = population_key(outcomes);
@@ -668,7 +747,7 @@ pub fn record_summary(
             "value_kind": "binary_rate",
             "counts": {
                 "planned_trial_count": rate.planned,
-                "eligible_trial_count": rate.planned - rate.excluded,
+                "eligible_trial_count": rate.planned - rate.excluded - rate.not_run,
                 "excluded_trial_count": rate.excluded,
                 "observed_trial_count": rate.with_verdict,
                 "missing_trial_count": rate.without_verdict,
@@ -714,7 +793,10 @@ pub fn record_summary(
             "population_key": population_key,
             "analysis_state": "computed",
             "analysis_method_version": ANALYSIS_VERSION,
-            "metric_result_refs": [{"record_id": metric_result_id, "record_type": "metric_result"}],
+            "metric_result_refs": std::iter::once(&metric_result_id)
+                .chain(&resource_metric_result_ids)
+                .map(|id| json!({"record_id": id, "record_type": "metric_result"}))
+                .collect::<Vec<_>>(),
             "primary_metric_ids": [METRIC_ID],
             "predeclared_plan_digest": outcomes.predeclared_digest(),
             "exclusions_summary": format!(
@@ -729,6 +811,7 @@ pub fn record_summary(
     Ok(SummaryRecords {
         metric_result_id,
         analysis_result_id,
+        resource_metric_result_ids,
     })
 }
 
@@ -1276,6 +1359,8 @@ mod tests {
                     task_id: task.to_string(),
                     outcome: *outcome,
                     attempts: u64::from(*outcome != TrialOutcome::NotRun),
+                    wall_time_ms: None,
+                    usage: ReportedUsage::Absent,
                 })
                 .collect(),
             plan_digest: "p".repeat(64),

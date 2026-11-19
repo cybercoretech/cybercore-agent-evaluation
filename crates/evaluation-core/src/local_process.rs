@@ -33,17 +33,17 @@ const SANDBOX_WORKSPACE: &str = "/workspace";
 const SANDBOX_INPUTS: &str = "/workspace/input";
 const SANDBOX_HOME: &str = "/home/runner";
 const SANDBOX_PATH: &str = "/usr/bin:/bin";
-const MAX_CONFIGURED_WALL_TIME_MS: u64 = 3_600_000;
-const MAX_CONFIGURED_INPUT_FILES: usize = 1024;
-const MAX_CONFIGURED_ARGUMENT_BYTES: u64 = 512 * 1024;
-const MAX_CONFIGURED_OUTPUT_FILES: usize = 10_000;
-const MAX_CONFIGURED_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const MAX_CONFIGURED_WALL_TIME_MS: u64 = 3_600_000;
+pub(crate) const MAX_CONFIGURED_INPUT_FILES: usize = 1024;
+pub(crate) const MAX_CONFIGURED_ARGUMENT_BYTES: u64 = 512 * 1024;
+pub(crate) const MAX_CONFIGURED_OUTPUT_FILES: usize = 10_000;
+pub(crate) const MAX_CONFIGURED_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
 const SANDBOX_OUTPUTS: &str = "/workspace/output";
-const MAX_SINGLE_ARGUMENT_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_SINGLE_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_INPUT_PATH_BYTES: usize = 4096;
 const MAX_INPUT_PATH_COMPONENT_BYTES: usize = 255;
 /// How long stdout/stderr may stay open after the sandbox process exits.
-const OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct LocalProcessRunnerConfig {
@@ -125,8 +125,8 @@ pub struct LocalProcessInputFile {
 }
 
 #[derive(Debug)]
-struct TemporaryInputDirectory {
-    path: PathBuf,
+pub(crate) struct TemporaryInputDirectory {
+    pub(crate) path: PathBuf,
 }
 
 impl Drop for TemporaryInputDirectory {
@@ -154,15 +154,15 @@ impl OutputStaging {
 }
 
 #[derive(Debug)]
-struct OutputCapture {
-    bytes: Vec<u8>,
-    truncated: bool,
+pub(crate) struct OutputCapture {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Debug)]
-struct SharedOutputBudget {
-    used: AtomicU64,
-    maximum: u64,
+pub(crate) struct SharedOutputBudget {
+    pub(crate) used: AtomicU64,
+    pub(crate) maximum: u64,
 }
 
 impl SharedOutputBudget {
@@ -791,22 +791,22 @@ impl Runner for LocalProcessRunner {
     }
 }
 
-struct CollectedOutput {
-    exit_status: Option<ExitStatus>,
-    stdout: OutputCapture,
-    stderr: OutputCapture,
-    timed_out: bool,
-    output_limit_exceeded: bool,
+pub(crate) struct CollectedOutput {
+    pub(crate) exit_status: Option<ExitStatus>,
+    pub(crate) stdout: OutputCapture,
+    pub(crate) stderr: OutputCapture,
+    pub(crate) timed_out: bool,
+    pub(crate) output_limit_exceeded: bool,
     /// A pipe stayed open past `drain_grace` after the process exited; that
     /// stream's capture was abandoned and is reported as empty and truncated.
-    drain_timed_out: bool,
+    pub(crate) drain_timed_out: bool,
 }
 
 /// Waits for the process and both output captures, enforcing the wall-time
 /// budget and the shared output limit. Once the process has exited, the
 /// captures get at most `drain_grace` to finish, so a descendant that keeps a
 /// pipe open can never stall the runner past its budget.
-async fn collect_process_output(
+pub(crate) async fn collect_process_output(
     child: &mut tokio::process::Child,
     mut stdout_task: tokio::task::JoinHandle<io::Result<OutputCapture>>,
     mut stderr_task: tokio::task::JoinHandle<io::Result<OutputCapture>>,
@@ -899,7 +899,7 @@ async fn collect_process_output(
     }
 }
 
-async fn capture_output<R>(
+pub(crate) async fn capture_output<R>(
     mut reader: R,
     budget: Arc<SharedOutputBudget>,
 ) -> io::Result<OutputCapture>
@@ -1061,7 +1061,7 @@ fn system_aliases() -> Vec<(String, PathBuf, bool)> {
     aliases
 }
 
-fn write_input_files(
+pub(crate) fn write_input_files(
     root: &Path,
     files: &[LocalProcessInputFile],
     maximum_bytes: u64,
@@ -1111,7 +1111,9 @@ fn write_input_files(
     Ok(total_bytes)
 }
 
-fn create_temporary_directory(root: &Path) -> Result<TemporaryInputDirectory, RunnerError> {
+pub(crate) fn create_temporary_directory(
+    root: &Path,
+) -> Result<TemporaryInputDirectory, RunnerError> {
     for _ in 0..32 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1155,7 +1157,7 @@ fn create_temporary_directory(root: &Path) -> Result<TemporaryInputDirectory, Ru
     ))
 }
 
-fn validate_requested_budgets(
+pub(crate) fn validate_requested_budgets(
     requested_wall_time_ms: u64,
     requested_output_bytes: u64,
     maximum_wall_time_ms: u64,
@@ -1201,14 +1203,14 @@ fn validate_relative_input_path(value: &str) -> Result<(), RunnerError> {
     Ok(())
 }
 
-fn valid_logical_id(value: &str) -> bool {
+pub(crate) fn valid_logical_id(value: &str) -> bool {
     !value.is_empty()
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn valid_environment_name(value: &str) -> bool {
+pub(crate) fn valid_environment_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
         return false;
@@ -1217,7 +1219,7 @@ fn valid_environment_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn is_reserved_environment_name(value: &str) -> bool {
+pub(crate) fn is_reserved_environment_name(value: &str) -> bool {
     matches!(
         value,
         "PATH" | "HOME" | "PWD" | "TMPDIR" | "IFS" | "ENV" | "BASH_ENV" | "SHELLOPTS" | "CDPATH"
@@ -1242,7 +1244,11 @@ fn is_executable(_path: &Path) -> bool {
     false
 }
 
-fn runner_error(kind: RunnerErrorKind, retryable: bool, message: impl Into<String>) -> RunnerError {
+pub(crate) fn runner_error(
+    kind: RunnerErrorKind,
+    retryable: bool,
+    message: impl Into<String>,
+) -> RunnerError {
     RunnerError {
         kind,
         retryable,
@@ -1250,11 +1256,11 @@ fn runner_error(kind: RunnerErrorKind, retryable: bool, message: impl Into<Strin
     }
 }
 
-fn invalid(message: impl Into<String>) -> RunnerError {
+pub(crate) fn invalid(message: impl Into<String>) -> RunnerError {
     runner_error(RunnerErrorKind::InvalidRequest, false, message)
 }
 
-fn unavailable(message: impl Into<String>) -> RunnerError {
+pub(crate) fn unavailable(message: impl Into<String>) -> RunnerError {
     runner_error(RunnerErrorKind::Unavailable, false, message)
 }
 

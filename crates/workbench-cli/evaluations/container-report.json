@@ -1,0 +1,300 @@
+{
+  "format": "cybercore-workbench-evaluation/v0",
+  "schedule": {
+    "evaluation_ref": {
+      "record_id": "EVAL-CONTAINER-REPORT",
+      "record_type": "evaluation"
+    },
+    "plan_ref": {
+      "record_id": "PLAN-CONTAINER-REPORT",
+      "record_type": "evaluation_plan"
+    },
+    "max_active_runs": 2,
+    "retry_policy": {
+      "max_attempts_per_trial": 2,
+      "retry_retryable_runner_errors": true,
+      "retryable_execution_failure_codes": [],
+      "retry_timeouts": false
+    },
+    "trials": [
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-GOOD-REPORT",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-REPORT",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "sh",
+          "args": [
+            "-c",
+            "mkdir -p /workspace/output/out && printf 'total: %s\\n' \"$(wc -l < /workspace/input/numbers.txt)\" > /workspace/output/out/report.txt && echo done"
+          ],
+          "files": [
+            {
+              "path": "numbers.txt",
+              "content": "1\n2\n3\n"
+            }
+          ],
+          "environment": {},
+          "collect_outputs": true,
+          "image_id": "ubuntu"
+        },
+        "budget": {
+          "max_wall_time_ms": 10000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 65536,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "deny_all"
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      },
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-SLOPPY-REPORT",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-REPORT",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "sh",
+          "args": [
+            "-c",
+            "printf 'total: 3\\n' > /workspace/output/report.txt && touch /workspace/output/scratch.tmp && echo done"
+          ],
+          "files": [
+            {
+              "path": "numbers.txt",
+              "content": "1\n2\n3\n"
+            }
+          ],
+          "environment": {},
+          "collect_outputs": true,
+          "image_id": "ubuntu"
+        },
+        "budget": {
+          "max_wall_time_ms": 10000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 65536,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "deny_all"
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      },
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-MEMORY-HOG",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-REPORT",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "sh",
+          "args": [
+            "-c",
+            "tail /dev/zero"
+          ],
+          "files": [],
+          "environment": {},
+          "collect_outputs": false,
+          "image_id": "ubuntu"
+        },
+        "budget": {
+          "max_wall_time_ms": 10000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 0,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "deny_all"
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      }
+    ]
+  },
+  "runner": {
+    "type": "podman",
+    "images": {
+      "ubuntu": "docker.io/library/ubuntu:22.04"
+    },
+    "allowed_executables": {
+      "sh": "/bin/sh"
+    },
+    "limits": {
+      "max_wall_time_ms": 10000,
+      "max_output_bytes": 4096,
+      "max_workspace_bytes": 16777216,
+      "max_tmp_bytes": 8388608,
+      "max_artifact_bytes": 65536,
+      "max_output_files": 16
+    },
+    "resources": {
+      "memory_bytes": 67108864,
+      "cpu_millis": 500,
+      "pids_limit": 64
+    }
+  },
+  "verifier": {
+    "type": "checks",
+    "checks": {
+      "TRIAL-GOOD-REPORT": [
+        {
+          "criterion_id": "report-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "total: 3\n"
+        },
+        {
+          "criterion_id": "no-scratch-files",
+          "kind": "file_absent",
+          "path": "scratch.tmp"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ],
+      "TRIAL-SLOPPY-REPORT": [
+        {
+          "criterion_id": "report-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "total: 3\n"
+        },
+        {
+          "criterion_id": "no-scratch-files",
+          "kind": "file_absent",
+          "path": "scratch.tmp"
+        },
+        {
+          "criterion_id": "says-done",
+          "kind": "stdout_contains",
+          "text": "done"
+        }
+      ]
+    }
+  },
+  "project_ref": {
+    "record_id": "PROJECT-LOCAL",
+    "record_type": "project"
+  },
+  "store_output_evidence": true,
+  "task_revisions": [
+    {
+      "record_id": "TASK-REPORT",
+      "record_type": "task_revision",
+      "schema_version": "0.1.0",
+      "created_at": "2026-11-18T00:00:00Z",
+      "provenance": {
+        "source": {
+          "system": "workbench-example",
+          "component": "cat-smoke.json",
+          "component_version": "0.1.0",
+          "origin_id": "cat-smoke"
+        },
+        "captured_by": "workbench-example",
+        "capture_version": "0.1.0"
+      },
+      "benchmark_ref": {
+        "record_id": "BENCH-CAT-SMOKE",
+        "record_type": "benchmark_revision"
+      },
+      "task_key": "write-report",
+      "revision": 1,
+      "validity_state": "valid",
+      "task_family": "sandbox_smoke",
+      "objective": "Count the input lines and write out/report.txt; leave no scratch files.",
+      "agent_instruction": "Write 'total: N' to /workspace/output/out/report.txt.",
+      "inputs": [],
+      "permitted_tools": [
+        "sh"
+      ],
+      "permitted_effects": [
+        "none"
+      ],
+      "constraints": [
+        "No network access."
+      ],
+      "acceptance_criteria": [
+        {
+          "criterion_id": "report-written",
+          "description": "out/report.txt contains the correct total.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "mandatory"
+        },
+        {
+          "criterion_id": "no-scratch-files",
+          "description": "No scratch files are left behind.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "minor"
+        },
+        {
+          "criterion_id": "says-done",
+          "description": "The agent reports completion.",
+          "verification_requirement": "Checked by the workbench checks verifier.",
+          "criticality": "minor"
+        }
+      ],
+      "prohibited_outcomes": [
+        "Any output other than the file contents."
+      ],
+      "invariants": [
+        "The input file is not modified."
+      ],
+      "verification_plan": {
+        "required_criterion_ids": [
+          "report-written",
+          "no-scratch-files",
+          "says-done"
+        ],
+        "verifier_refs": [
+          {
+            "record_id": "VERIFIER-STDOUT-EQUALS",
+            "record_type": "verifier"
+          }
+        ],
+        "independent_verification_required": true
+      },
+      "difficulty_stratum": "low",
+      "risk_stratum": "low"
+    }
+  ]
+}

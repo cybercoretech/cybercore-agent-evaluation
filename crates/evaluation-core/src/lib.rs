@@ -3,6 +3,7 @@
 //! The core has no Cloudflare, HTTP, database, MCP, or UI dependency. Runtime
 //! adapters depend on these types; the core does not depend on adapters.
 
+pub mod container;
 pub mod domain_invariants;
 pub mod local_process;
 pub mod orchestration;
@@ -10,6 +11,7 @@ pub mod run_state;
 pub mod runner;
 pub mod workspace_outputs;
 
+pub use container::{container_name, ContainerRunner, ContainerRunnerConfig, ContainerTaskInput};
 pub use domain_invariants::{validate_domain_fixture, validate_domain_fixtures};
 pub use local_process::{
     LocalProcessInputFile, LocalProcessRunner, LocalProcessRunnerConfig, LocalProcessTaskInput,
@@ -27,7 +29,7 @@ pub use runner::{
     RunnerResult, RunnerType, SideEffectPolicy,
 };
 pub use workspace_outputs::{
-    artifact_staging_dir, collect_outputs, CollectedFile, CollectedOutputs,
+    artifact_staging_dir, collect_outputs, collect_outputs_into, CollectedFile, CollectedOutputs,
 };
 
 /// Version of the core's public Rust API surface.

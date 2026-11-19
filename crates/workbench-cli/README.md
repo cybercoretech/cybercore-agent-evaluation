@@ -37,13 +37,17 @@ TRIAL-NUMBERS fails on purpose: its expected output says `4` where the file cont
 |---|---|
 | `format` | `cybercore-workbench-evaluation/v0` |
 | `schedule` | the frozen `EvaluationSchedule`: trials, budgets, deny-all policies, retry policy, and `max_active_runs` (how many attempts run at once). It's immutable once stored. |
-| `runner` | `{"type": "local_bubblewrap", "allowed_executables": {...}, "limits": {...}}`; every trial's `task_input.executable_id` must be listed |
+| `runner` | `{"type": "local_bubblewrap", ...}` (prototype isolation), or `{"type": "podman", "images": {"ubuntu": "docker.io/library/ubuntu:22.04"}, "allowed_executables": {"sh": "/bin/sh"}, "limits": {...}, "resources": {"memory_bytes": ..., "cpu_millis": ..., "pids_limit": ...}}` (rootless containers with real limits). Every trial's `task_input.executable_id` must be listed, and with several images each trial needs an `image_id`. |
 | `verifier` | `{"type": "stdout_equals", "expected": {...}}`, or `{"type": "checks", "checks": {"TRIAL-ID": [{"criterion_id": "report-written", "kind": "file_equals", "path": "out/report.txt", "expected": "..."}]}}` with kinds `stdout_equals`, `stdout_contains`, `file_exists`, `file_absent`, `file_equals` and `file_contains`. This is hidden grader data, never part of a `task_input`. |
 | `project_ref` | the project the output evidence belongs to |
 | `store_output_evidence` | `true` stores each runner output as evidence. Only use it for non-sensitive tasks: the local runner does not redact. |
 | `task_revisions` | optional `task_revision` records stored before the run. Their criteria's `criticality` (mandatory, major or minor) and `required_criterion_ids` decide each run's outcome ([ADR-0013](../../docs/decisions/0013-concurrency-and-outcome-rules.md)). |
 
 Unknown fields are rejected, and every error names the file and the field.
+
+## 📦 Container runner
+
+`runner.type: "podman"` runs every attempt in its own rootless Podman container ([ADR-0015](../../docs/decisions/0015-podman-container-runner.md)): no network, all capabilities dropped, a read-only image, size-limited tmpfs mounts, and cgroup memory, CPU and process limits. The runner checks that the limits really apply and refuses to run otherwise. Images must already be pulled, because the runner runs them by image ID and never pulls. A task stopped by the memory limit is recorded as `errored` / `not_scored`. See `evaluations/container-report.json`.
 
 ## 📁 Checking files the agent writes
 

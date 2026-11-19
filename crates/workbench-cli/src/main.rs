@@ -411,6 +411,7 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
         "concurrency up to {} attempt(s) at once",
         evaluation.schedule.max_active_runs
     );
+    say!("verifier    {}", evaluation.verifier_summary());
     if evaluation.task_revisions.is_empty() {
         say!("outcomes    default rules (no task_revisions in the file)");
     }

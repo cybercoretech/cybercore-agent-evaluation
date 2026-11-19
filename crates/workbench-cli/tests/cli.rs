@@ -546,3 +546,176 @@ fn podman_runner_enforces_limits_and_checks_files() {
     // not a task failure.
     assert_eq!(outcome(2), ("errored".into(), "not_scored".into()));
 }
+
+#[test]
+fn model_judge_specs_are_validated() {
+    let dir = TempDir::new("judge-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "no consent",
+            Box::new(|v| {
+                v["verifier"]["consent_to_send_outputs"] = false.into();
+            }),
+            "verifier.consent_to_send_outputs must be true",
+        ),
+        (
+            "bad effort",
+            Box::new(|v| {
+                v["verifier"]["effort"] = "extreme".into();
+            }),
+            "verifier.effort \"extreme\" must be one of",
+        ),
+        (
+            "file without collection",
+            Box::new(|v| {
+                v["verifier"]["criteria"]["TRIAL-GREETING"][0]["file"] = "out.txt".into();
+            }),
+            "judges a file, but schedule.trials[TRIAL-GREETING].task_input.collect_outputs is not true",
+        ),
+        (
+            "empty rubric",
+            Box::new(|v| {
+                v["verifier"]["criteria"]["TRIAL-GREETING"][0]["rubric"] = " ".into();
+            }),
+            "rubric must not be empty",
+        ),
+        (
+            "credential in file",
+            Box::new(|v| {
+                v["verifier"]["api_key"] = "sk-not-here".into();
+            }),
+            "unknown field `api_key`",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("model-judge.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{}.json", name.replace(' ', "-")), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let message = stderr(&output);
+        assert!(
+            message.contains(expected),
+            "{name}: expected {expected:?} in {message}"
+        );
+    }
+    let file = dir.file("ok.json", &load_example("model-judge.json"));
+    let plan = workbench(
+        &[
+            "run",
+            file.to_str().unwrap(),
+            "--dry-run",
+            "--store",
+            dir.0.join("s").to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(stdout(&plan).contains("model_judge (claude-opus-5-5, effort medium): judged outputs are sent to the Anthropic API"));
+}
+
+/// A one-request-at-a-time mock of the Messages API that judges by keyword,
+/// so the whole CLI path runs with nothing leaving the machine.
+fn mock_judge_api() -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim_end().is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut raw = vec![0_u8; length];
+            let _ = reader.read_exact(&mut raw);
+            let body: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let prompt = body["messages"][0]["content"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let verdict = if prompt.contains("hello from the sandbox") {
+                "pass"
+            } else {
+                "fail"
+            };
+            let text = serde_json::json!({"verdict": verdict, "rationale": format!("mock judged {verdict}")}).to_string();
+            let reply = serde_json::json!({
+                "model": body["model"], "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": text}]
+            })
+            .to_string();
+            let mut stream = stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        }
+    });
+    url
+}
+
+#[test]
+fn model_judge_verdicts_flow_through_a_real_run() {
+    let dir = TempDir::new("judge-run");
+    let file = dir.file("eval.json", &load_example("model-judge.json"));
+    let store = dir.0.join("store");
+    let api = mock_judge_api();
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ])
+        .env_remove("WORKBENCH_STORE")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env("ANTHROPIC_BASE_URL", &api)
+        .env("ANTHROPIC_API_KEY", "test-key-for-local-mock")
+        .output()
+        .unwrap();
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status = workbench(
+        &["status", "EVAL-MODEL-JUDGE", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let report: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let outcome = |i: usize| {
+        report["trials"][i]["runs"][0]["run_outcome"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // The mock passes the greeting and fails the numbers trial.
+    assert_eq!(outcome(0), "pass");
+    assert_eq!(outcome(1), "fail");
+}

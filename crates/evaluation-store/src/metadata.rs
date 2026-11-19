@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_durable_scheduling.sql"),
+    include_str!("../migrations/0003_scheduler_snapshots.sql"),
 ];
 const MAX_LIST_LIMIT: u32 = 1000;
 
@@ -261,6 +262,19 @@ impl SqliteMetadataStore {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Whether a record with this ID is stored (no body read or digest check).
+    pub fn record_exists(&self, record_id: &str) -> StoreResult<bool> {
+        let connection = self.lock()?;
+        let found: Option<i64> = connection
+            .query_row(
+                "SELECT 1 FROM records WHERE record_id = ?1",
+                params![record_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
     }
 
     /// Number of stored records, optionally of one type.

@@ -401,3 +401,140 @@ fn the_journal_is_append_only_and_gaps_are_detected() {
         Err(StoreError::Integrity(_))
     ));
 }
+
+fn unavailable(request_id: &str) -> Result<RunnerResult, cybercore_evaluation_core::RunnerError> {
+    let _ = request_id;
+    Err(cybercore_evaluation_core::RunnerError {
+        kind: cybercore_evaluation_core::RunnerErrorKind::Unavailable,
+        retryable: true,
+        message: "host unreachable".into(),
+    })
+}
+
+/// Journal: reserve T1, reserve T2, T1 unavailable (retry), reserve T1 again,
+/// T2 finished; then a crash with T1's second attempt in flight.
+fn build_history(store: &SqliteMetadataStore, interval: u64) {
+    store
+        .create_schedule(&schedule("EVAL-1", retrying()))
+        .unwrap();
+    let (mut scheduler, _) = DurableScheduler::acquire(store, "EVAL-1", "worker-a", LONG).unwrap();
+    scheduler.set_snapshot_interval(interval);
+    scheduler
+        .reserve_attempt("TRIAL-1", identity("1a"))
+        .unwrap();
+    scheduler
+        .reserve_attempt("TRIAL-2", identity("2a"))
+        .unwrap();
+    scheduler
+        .complete_attempt("TRIAL-1", "REQ-1a", unavailable("REQ-1a"))
+        .unwrap();
+    scheduler
+        .reserve_attempt("TRIAL-1", identity("1b"))
+        .unwrap();
+    scheduler
+        .complete_attempt("TRIAL-2", "REQ-2a", Ok(finished("REQ-2a")))
+        .unwrap();
+}
+
+fn snapshot_rows(path: &PathBuf) -> Vec<i64> {
+    let raw = Connection::open(path).unwrap();
+    let mut statement = raw
+        .prepare("SELECT seq FROM scheduler_snapshots ORDER BY seq")
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[test]
+fn snapshots_restore_exactly_the_replayed_state() {
+    let db = TempDb::new("snapshots");
+    let store = SqliteMetadataStore::open(db.path()).unwrap();
+    build_history(&store, 3);
+    assert_eq!(snapshot_rows(&db.path()), vec![3]);
+
+    // From the snapshot: only entries 4-5 are replayed, and the in-flight
+    // attempt is still found and closed.
+    let (scheduler, report) =
+        DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    assert_eq!(report.snapshot_seq, Some(3));
+    assert_eq!(report.replayed_commands, 2);
+    assert!(!report.snapshot_rejected);
+    assert_eq!(report.interrupted_attempts, vec!["REQ-1b".to_string()]);
+    let from_snapshot = scheduler.coordinator().export_state().unwrap();
+    scheduler.release().unwrap();
+
+    // The interruption was journaled as entry 6 by a scheduler using the
+    // default interval, so the latest snapshot is still the one at 3.
+    assert_eq!(snapshot_rows(&db.path()), vec![3]);
+
+    // Without any snapshot, a full replay reaches the identical state.
+    Connection::open(db.path())
+        .unwrap()
+        .execute("DELETE FROM scheduler_snapshots", [])
+        .unwrap();
+    let (scheduler, report) =
+        DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    assert_eq!(report.snapshot_seq, None);
+    assert_eq!(report.replayed_commands, 6);
+    assert_eq!(
+        scheduler.coordinator().export_state().unwrap(),
+        from_snapshot
+    );
+    assert_eq!(
+        scheduler.coordinator().snapshot("TRIAL-1").unwrap().state,
+        TrialExecutionState::AttemptsExhausted
+    );
+}
+
+#[test]
+fn unusable_snapshots_fall_back_to_a_full_replay() {
+    let db = TempDb::new("bad-snapshot");
+    let store = SqliteMetadataStore::open(db.path()).unwrap();
+    build_history(&store, 3);
+    let raw = Connection::open(db.path()).unwrap();
+
+    // Tampered state: digest mismatch.
+    raw.execute(
+        "UPDATE scheduler_snapshots SET state = replace(state, 'TRIAL-2', 'TRIAL-9')",
+        [],
+    )
+    .unwrap();
+    let (scheduler, report) =
+        DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    assert!(report.snapshot_rejected);
+    assert_eq!(report.snapshot_seq, None);
+    assert_eq!(report.replayed_commands, 5);
+    assert_eq!(
+        scheduler.coordinator().snapshot("TRIAL-2").unwrap().state,
+        TrialExecutionState::ExecutionComplete
+    );
+    scheduler.release().unwrap();
+
+    // A snapshot claiming a position beyond the journal is ignored too.
+    raw.execute(
+        "INSERT INTO scheduler_snapshots (evaluation_id, seq, state, state_sha256, schedule_sha256, created_at)
+         SELECT evaluation_id, 999, state, state_sha256, schedule_sha256, created_at
+         FROM scheduler_snapshots ORDER BY seq DESC LIMIT 1",
+        [],
+    )
+    .unwrap();
+    let (_, report) = DurableScheduler::acquire(&store, "EVAL-1", "worker-a", LONG).unwrap();
+    assert!(report.snapshot_rejected);
+    assert_eq!(report.snapshot_seq, None);
+}
+
+#[test]
+fn only_the_latest_snapshot_is_kept_and_zero_disables_them() {
+    let db = TempDb::new("snapshot-pruning");
+    let store = SqliteMetadataStore::open(db.path()).unwrap();
+    build_history(&store, 2);
+    assert_eq!(snapshot_rows(&db.path()), vec![4]);
+
+    let db = TempDb::new("snapshot-off");
+    let store = SqliteMetadataStore::open(db.path()).unwrap();
+    build_history(&store, 0);
+    assert!(snapshot_rows(&db.path()).is_empty());
+}

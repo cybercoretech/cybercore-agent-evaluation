@@ -56,7 +56,7 @@ let report = run_ready_trials(&store, &mut scheduler, &runner, &config, &verifie
 
 Implement `Verifier` for your own criteria. `StdoutEqualsVerifier` is a deterministic reference implementation. Set `store_output_evidence` only when task outputs are non-sensitive: the local runner does not redact.
 
-`LeaseLost` means another scheduler took over: stop immediately. Use a stable owner name per host, so that a restarted process can take its own lease back at once.
+`LeaseLost` means another scheduler took over: stop immediately. Every 1,000 journal commands (`set_snapshot_interval`), the scheduler snapshots its state in the same transaction as the journal entry, so a restart replays only the commands after the latest snapshot. A bad snapshot is ignored and the full journal is replayed ([ADR-0016](../../docs/decisions/0016-scheduler-snapshots.md)). Use a stable owner name per host, so that a restarted process can take its own lease back at once.
 
 Try a crash and resume with the real Bubblewrap runner:
 

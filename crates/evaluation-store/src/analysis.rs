@@ -13,12 +13,15 @@
 //!   cluster bootstrap over tasks, so repeated trials of one task do not
 //!   pass for independent evidence. Bootstrap seeds come from the data, so
 //!   the same results always give the same interval.
-//! - Comparisons pair trials by task revision and are exploratory (nothing
-//!   about them was predeclared).
+//! - Comparisons pair trials by task revision. They are exploratory unless the
+//!   treatment's frozen `evaluation_plan` declared them before any treatment
+//!   result existed (ADR-0021); then the declared rule is applied unchanged
+//!   and the result is confirmatory.
 
 use crate::canonical::{canonical_json, sha256_hex};
 use crate::{LocalStore, StoreError, StoreResult};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
+use cybercore_evaluation_core::EvaluationSchedule;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,6 +72,12 @@ pub struct EvaluationOutcomes {
     pub benchmark_digest: String,
     pub task_population_digest: String,
     pub system_fingerprint_digest: String,
+    /// The schedule's `plan_ref` ID.
+    pub plan_id: String,
+    /// The frozen `evaluation_plan` record, when one was stored.
+    pub frozen_plan: Option<Value>,
+    /// When the first run record (a result) was written.
+    pub first_result_at: Option<DateTime<Utc>>,
 }
 
 impl EvaluationOutcomes {
@@ -119,27 +128,18 @@ impl EvaluationOutcomes {
         let schedule_json = serde_json::to_value(&schedule)
             .map_err(|e| StoreError::InvalidRecord(format!("schedule: {e}")))?;
         let plan_digest = digest(&schedule_json);
-        let task_ids: BTreeSet<&str> = trials.iter().map(|t| t.task_id.as_str()).collect();
-        let mut task_digests = Vec::new();
-        let mut benchmarks = BTreeSet::new();
-        for task in &task_ids {
-            match meta.get_record(task)? {
-                Some(record) => {
-                    if let Some(id) = record["benchmark_ref"]["record_id"].as_str() {
-                        benchmarks.insert(id.to_string());
-                    }
-                    task_digests.push(json!([task, digest(&record)]));
-                }
-                None => task_digests.push(json!([task, Value::Null])),
-            }
-        }
-        let task_population_digest = digest(&Value::Array(task_digests));
-        let benchmark_id = match benchmarks.len() {
-            1 => benchmarks.into_iter().next().unwrap_or_default(),
-            // No (single) stored benchmark: name it after the task set, so
-            // evaluations over the same tasks share it.
-            _ => format!("BENCH-TASKSET-{}", &task_population_digest[..24]),
-        };
+        let (task_population_digest, benchmark_id) = task_population(store, &schedule)?;
+        let first_result_at = runs
+            .values()
+            .flatten()
+            .filter_map(|run| run["created_at"].as_str())
+            .filter_map(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc))
+            .min();
+        let plan_id = schedule.plan_ref.record_id.clone();
+        let frozen_plan = meta.get_record(&plan_id)?.filter(|plan| {
+            plan["record_type"] == "evaluation_plan" && plan["lifecycle_state"] == "frozen"
+        });
         let benchmark_digest = digest(&json!({
             "benchmark": benchmark_id,
             "task_population": task_population_digest,
@@ -157,7 +157,18 @@ impl EvaluationOutcomes {
             benchmark_digest,
             task_population_digest,
             system_fingerprint_digest: digest(&json!(fingerprints)),
+            plan_id,
+            frozen_plan,
+            first_result_at,
         })
+    }
+
+    /// The frozen plan's content digest, else the schedule's digest.
+    fn predeclared_digest(&self) -> String {
+        self.frozen_plan
+            .as_ref()
+            .and_then(|plan| plan["content_digest"].as_str())
+            .map_or_else(|| self.plan_digest.clone(), str::to_string)
     }
 
     /// (passes, counted trials) per task, over trials that count.
@@ -320,6 +331,59 @@ pub struct Comparison {
     pub direction: &'static str,
     pub mismatches: Vec<String>,
     pub limitations: Vec<String>,
+    /// `confirmatory`, `exploratory`, `descriptive_only` or `prohibited`.
+    pub inferential_status: &'static str,
+    /// Confidence level of `interval` (0.95, or 1 − the declared adjusted alpha).
+    pub confidence_level: f64,
+    pub multiplicity_method: &'static str,
+    pub family_size: u64,
+    /// `meaningful`, `not_meaningful`, `uncertain` or `not_assessed`.
+    pub practical_significance: &'static str,
+    pub practical_significance_threshold: Option<f64>,
+    /// The predeclared comparison this result answers, if any.
+    pub declared_comparison_id: Option<String>,
+}
+
+/// A comparison declared in a frozen plan.
+struct Declared {
+    id: String,
+    alpha: f64,
+    multiplicity: &'static str,
+    family_size: u64,
+    minimum_matched: u64,
+    design: String,
+    threshold: Option<f64>,
+    frozen_at: Option<DateTime<Utc>>,
+}
+
+fn declared_comparison(
+    baseline: &EvaluationOutcomes,
+    treatment: &EvaluationOutcomes,
+) -> Option<Declared> {
+    let plan = treatment.frozen_plan.as_ref()?;
+    let all = plan["analysis_plan"]["comparisons"].as_array()?;
+    let item = all.iter().find(|c| {
+        c["baseline_condition_id"] == baseline.evaluation_id.as_str()
+            && c["treatment_condition_id"] == treatment.evaluation_id.as_str()
+            && c["metric_id"] == METRIC_ID
+    })?;
+    Some(Declared {
+        id: item["comparison_id"].as_str()?.to_string(),
+        alpha: item["alpha"].as_f64()?,
+        multiplicity: match item["multiplicity_method"].as_str()? {
+            "bonferroni" => "bonferroni",
+            "holm" => "holm",
+            _ => "none_predeclared_single_test",
+        },
+        family_size: all.len() as u64,
+        minimum_matched: item["minimum_matched_units"].as_u64()?,
+        design: item["design"].as_str()?.to_string(),
+        threshold: item["practical_significance_threshold"].as_f64(),
+        frozen_at: plan["frozen_at"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc)),
+    })
 }
 
 pub fn compare(
@@ -335,9 +399,14 @@ pub fn compare(
     if baseline.benchmark_digest != treatment.benchmark_digest {
         mismatches.push("benchmark_content".to_string());
     }
-    let mut limitations = vec![
-        "Exploratory: the comparison was not predeclared in either evaluation plan.".to_string(),
-    ];
+    let declared = declared_comparison(baseline, treatment);
+    let mut limitations = Vec::new();
+    if declared.is_none() {
+        limitations.push(
+            "Exploratory: the treatment's frozen plan does not declare this comparison."
+                .to_string(),
+        );
+    }
     if !mismatches.is_empty() {
         limitations.push(
             "The evaluations did not run the same task revisions, so their pass rates are not compared.".into(),
@@ -353,6 +422,13 @@ pub fn compare(
             direction: "undetermined",
             mismatches,
             limitations,
+            inferential_status: "prohibited",
+            confidence_level: CONFIDENCE_LEVEL,
+            multiplicity_method: "none_predeclared_single_test",
+            family_size: 1,
+            practical_significance: "not_assessed",
+            practical_significance_threshold: None,
+            declared_comparison_id: declared.map(|d| d.id),
         };
     }
     let base_tasks = baseline.per_task();
@@ -404,12 +480,13 @@ pub fn compare(
         limitations
             .push("At least one evaluation's pass rate is descriptive only or has no data.".into());
     }
-    Comparison {
-        status: if ready && interval.is_some() {
-            "comparable"
-        } else {
-            "insufficient_evidence"
-        },
+    let status = if ready && interval.is_some() {
+        "comparable"
+    } else {
+        "insufficient_evidence"
+    };
+    let mut comparison = Comparison {
+        status,
         design: "blocked_paired",
         matched_tasks: pairs.len() as u64,
         difference,
@@ -423,6 +500,124 @@ pub fn compare(
         direction,
         mismatches,
         limitations,
+        inferential_status: if status == "comparable" {
+            "exploratory"
+        } else {
+            "descriptive_only"
+        },
+        confidence_level: CONFIDENCE_LEVEL,
+        multiplicity_method: "none_predeclared_single_test",
+        family_size: 1,
+        practical_significance: "not_assessed",
+        practical_significance_threshold: None,
+        declared_comparison_id: None,
+    };
+    if let Some(declared) = declared {
+        apply_declared(
+            &mut comparison,
+            &declared,
+            treatment,
+            &pairs,
+            single,
+            baseline,
+        );
+    }
+    comparison
+}
+
+/// Applies a predeclared comparison's rule, or records why it cannot be
+/// confirmatory. Never changes the rule to fit the data.
+fn apply_declared(
+    comparison: &mut Comparison,
+    declared: &Declared,
+    treatment: &EvaluationOutcomes,
+    pairs: &[TaskPair],
+    single: bool,
+    baseline: &EvaluationOutcomes,
+) {
+    comparison.declared_comparison_id = Some(declared.id.clone());
+    comparison.practical_significance_threshold = declared.threshold;
+    let mut blockers = Vec::new();
+    match (declared.frozen_at, treatment.first_result_at) {
+        (Some(frozen), Some(first)) if first < frozen => blockers.push(format!(
+            "the plan was frozen at {} but the treatment already had results from {}",
+            frozen.to_rfc3339_opts(SecondsFormat::Millis, true),
+            first.to_rfc3339_opts(SecondsFormat::Millis, true)
+        )),
+        (None, _) => blockers.push("the plan has no valid frozen_at".into()),
+        _ => {}
+    }
+    if declared.design != "blocked_paired" {
+        blockers.push(format!(
+            "it declares design {}, but the workbench applies blocked_paired only",
+            declared.design
+        ));
+    }
+    if comparison.status != "comparable" {
+        blockers.push("the comparison is not comparable with an interval yet".into());
+    }
+    if comparison.matched_tasks < declared.minimum_matched {
+        blockers.push(format!(
+            "only {} task(s) are paired, fewer than the declared minimum of {}",
+            comparison.matched_tasks, declared.minimum_matched
+        ));
+    }
+    if !blockers.is_empty() {
+        comparison.limitations.push(format!(
+            "Declared as {} in plan {}, but not confirmatory: {}.",
+            declared.id,
+            treatment.plan_id,
+            blockers.join("; ")
+        ));
+        return;
+    }
+    // Bonferroni across the plan's declared comparisons; Holm needs the
+    // other comparisons' p-values, so it is applied as Bonferroni.
+    let (level, multiplicity) = match declared.multiplicity {
+        "none_predeclared_single_test" => (declared.alpha, "none_predeclared_single_test"),
+        other => (declared.alpha / declared.family_size.max(1) as f64, other),
+    };
+    let confidence = 1.0 - level;
+    let seed = seed_from(&format!(
+        "{}{}",
+        baseline.data_digest(),
+        treatment.data_digest()
+    ));
+    let interval = paired_bootstrap_at(pairs, seed, confidence);
+    let difference = comparison.difference.unwrap_or(0.0);
+    let significant = match comparison.p_value {
+        Some(p) if single => p < level,
+        _ => interval.0 > 0.0 || interval.1 < 0.0,
+    };
+    comparison.interval = Some(interval);
+    comparison.confidence_level = confidence;
+    comparison.direction = match (significant, difference > 0.0, difference < 0.0) {
+        (true, true, _) => "favors_treatment",
+        (true, _, true) => "favors_baseline",
+        _ => "undetermined",
+    };
+    comparison.inferential_status = "confirmatory";
+    comparison.multiplicity_method = multiplicity;
+    comparison.family_size = declared.family_size;
+    comparison.practical_significance = match declared.threshold {
+        None => "not_assessed",
+        Some(t) if interval.0 > t || interval.1 < -t => "meaningful",
+        Some(t) if interval.0 > -t && interval.1 < t => "not_meaningful",
+        Some(_) => "uncertain",
+    };
+    let rule = if single {
+        "McNemar exact test"
+    } else {
+        "paired bootstrap interval excluding 0"
+    };
+    comparison.limitations.push(format!(
+        "Confirmatory: predeclared as {} in plan {}; decided by the {rule} at level {level:.4} ({} over {} declared comparison(s)).",
+        declared.id, treatment.plan_id, multiplicity.replace('_', " "), declared.family_size
+    ));
+    if declared.multiplicity == "holm" {
+        comparison.limitations.push(
+            "Holm was declared; it is applied as Bonferroni, which is more conservative.".into(),
+        );
     }
 }
 
@@ -521,7 +716,7 @@ pub fn record_summary(
             "analysis_method_version": ANALYSIS_VERSION,
             "metric_result_refs": [{"record_id": metric_result_id, "record_type": "metric_result"}],
             "primary_metric_ids": [METRIC_ID],
-            "predeclared_plan_digest": outcomes.plan_digest,
+            "predeclared_plan_digest": outcomes.predeclared_digest(),
             "exclusions_summary": format!(
                 "{} trial(s) excluded as invalid; {} without a verdict counted as not passed; {} not run yet.",
                 rate.excluded, rate.without_verdict, rate.not_run
@@ -585,11 +780,7 @@ pub fn record_comparison(
             "treatment_trial_count": treatment.0.trials.len(),
             "matched_pair_count": comparison.matched_tasks,
         },
-        "inferential_status": match comparison.status {
-            "comparable" => "exploratory",
-            "not_comparable" => "prohibited",
-            _ => "descriptive_only",
-        },
+        "inferential_status": comparison.inferential_status,
         "limitations": comparison.limitations,
         "computed_at": now,
     });
@@ -603,16 +794,22 @@ pub fn record_comparison(
         {
             effect.insert(
                 "interval".into(),
-                json!({"method": "paired_bootstrap", "confidence_level": CONFIDENCE_LEVEL, "lower_bound": lower, "upper_bound": upper}),
+                json!({"method": "paired_bootstrap", "confidence_level": comparison.confidence_level, "lower_bound": lower, "upper_bound": upper}),
             );
         }
         map.insert("effect".into(), effect);
         let mut inference = json!({
             "method": comparison.method,
-            "multiplicity_method": "none_predeclared_single_test",
-            "comparison_family_size": 1,
-            "practical_significance": "not_assessed",
+            "multiplicity_method": comparison.multiplicity_method,
+            "comparison_family_size": comparison.family_size,
+            "practical_significance": comparison.practical_significance,
         });
+        if let (Some(t), Some(inference)) = (
+            comparison.practical_significance_threshold,
+            inference.as_object_mut(),
+        ) {
+            inference.insert("practical_significance_threshold".into(), json!(t));
+        }
         if let (Some(p), Some(inference)) = (comparison.p_value, inference.as_object_mut()) {
             inference.insert("p_value".into(), json!(p));
         }
@@ -620,6 +817,214 @@ pub fn record_comparison(
     }
     meta.put_record(&record)?;
     Ok(id)
+}
+
+/// (task-population digest, benchmark ID) for a schedule's task revisions.
+fn task_population(
+    store: &LocalStore,
+    schedule: &EvaluationSchedule,
+) -> StoreResult<(String, String)> {
+    let meta = store.metadata();
+    let task_ids: BTreeSet<&str> = schedule
+        .trials
+        .iter()
+        .map(|t| t.task_revision_ref.record_id.as_str())
+        .collect();
+    let mut task_digests = Vec::new();
+    let mut benchmarks = BTreeSet::new();
+    for task in &task_ids {
+        match meta.get_record(task)? {
+            Some(record) => {
+                if let Some(id) = record["benchmark_ref"]["record_id"].as_str() {
+                    benchmarks.insert(id.to_string());
+                }
+                task_digests.push(json!([task, digest(&record)]));
+            }
+            None => task_digests.push(json!([task, Value::Null])),
+        }
+    }
+    let population = digest(&Value::Array(task_digests));
+    let benchmark = match benchmarks.len() {
+        1 => benchmarks.into_iter().next().unwrap_or_default(),
+        // No (single) stored benchmark: name it after the task set, so
+        // evaluations over the same tasks share it.
+        _ => format!("BENCH-TASKSET-{}", &population[..24]),
+    };
+    Ok((population, benchmark))
+}
+
+/// A comparison to declare in an evaluation's plan; this evaluation is the
+/// treatment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComparisonDeclaration {
+    pub comparison_id: String,
+    pub baseline_evaluation_id: String,
+    pub alpha: f64,
+    pub minimum_matched_tasks: u64,
+    pub practical_significance_threshold: Option<f64>,
+}
+
+/// What an evaluation file declares before it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanDeclaration {
+    pub decision_question: String,
+    /// `census`, `random`, `stratified_random`, `curated` or `other`.
+    pub task_selection_method: String,
+    pub task_families: Vec<String>,
+    pub operating_conditions: Vec<String>,
+    pub comparisons: Vec<ComparisonDeclaration>,
+}
+
+/// Result of [`freeze_plan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FreezeOutcome {
+    Frozen { plan_id: String, frozen_at: String },
+    AlreadyFrozen { plan_id: String, frozen_at: String },
+}
+
+/// Writes the schedule's `plan_ref` as a frozen `evaluation_plan` (ADR-0021).
+/// Freezing again with identical content is a no-op; different content is
+/// refused, because a predeclared plan must not change once frozen.
+pub fn freeze_plan(
+    store: &LocalStore,
+    schedule: &EvaluationSchedule,
+    declaration: &PlanDeclaration,
+) -> StoreResult<FreezeOutcome> {
+    let meta = store.metadata();
+    let plan_id = schedule.plan_ref.record_id.clone();
+    let evaluation_id = schedule.evaluation_ref.record_id.clone();
+    let fingerprint = schedule
+        .trials
+        .first()
+        .map(|t| &t.system_fingerprint_ref)
+        .ok_or_else(|| StoreError::InvalidRecord("the schedule has no trials".into()))?;
+    let fingerprint =
+        json!({"record_id": fingerprint.record_id, "record_type": fingerprint.record_type});
+    let (_, benchmark) = task_population(store, schedule)?;
+    let mut per_task: BTreeMap<&str, u64> = BTreeMap::new();
+    for trial in &schedule.trials {
+        *per_task
+            .entry(trial.task_revision_ref.record_id.as_str())
+            .or_default() += 1;
+    }
+    let family = declaration.comparisons.len();
+    let comparisons: Vec<Value> = declaration
+        .comparisons
+        .iter()
+        .map(|c| {
+            let mut item = json!({
+                "comparison_id": c.comparison_id,
+                "metric_id": METRIC_ID,
+                "baseline_condition_id": c.baseline_evaluation_id,
+                "treatment_condition_id": evaluation_id,
+                "design": "blocked_paired",
+                "hypothesis": "two_sided",
+                "alpha": c.alpha,
+                "multiplicity_method": if family > 1 { "bonferroni" } else { "none_predeclared_single_test" },
+                "minimum_matched_units": c.minimum_matched_tasks,
+            });
+            if let (Some(t), Some(map)) = (c.practical_significance_threshold, item.as_object_mut()) {
+                map.insert("practical_significance_threshold".into(), json!(t));
+            }
+            item
+        })
+        .collect();
+    let gates: Vec<String> = declaration
+        .comparisons
+        .iter()
+        .map(|c| {
+            format!(
+                "{}: {evaluation_id} vs baseline {}, paired by task, two-sided at alpha {}{}, at least {} matched tasks.",
+                c.comparison_id,
+                c.baseline_evaluation_id,
+                c.alpha,
+                if family > 1 { format!(" (Bonferroni over {family})") } else { String::new() },
+                c.minimum_matched_tasks
+            )
+        })
+        .collect();
+    let mut analysis_plan = json!({
+        "primary_metric_ids": [METRIC_ID],
+        "uncertainty_method": "Wilson score interval; task-clustered bootstrap when tasks repeat; paired bootstrap and McNemar exact test for comparisons (ADR-0020).",
+        "missing_data_policy": "Trials without a verdict count as not passed and are reported as missing.",
+        "exclusion_policy": "Only runs recorded as invalid are excluded.",
+    });
+    if let Some(map) = analysis_plan.as_object_mut() {
+        if !gates.is_empty() {
+            map.insert("decision_gates".into(), json!(gates));
+            map.insert("comparisons".into(), json!(comparisons));
+        }
+    }
+    let task_families = if declaration.task_families.is_empty() {
+        vec!["unspecified".to_string()]
+    } else {
+        declaration.task_families.clone()
+    };
+    let body = json!({
+        "record_id": plan_id,
+        "record_type": "evaluation_plan",
+        "schema_version": SCHEMA_VERSION,
+        "plan_key": plan_id,
+        "revision": 1,
+        "lifecycle_state": "frozen",
+        "decision_question": declaration.decision_question,
+        "workload_scope": {
+            "description": declaration.decision_question,
+            "task_families": task_families,
+            "operating_conditions": declaration.operating_conditions,
+        },
+        "system_fingerprint_refs": [fingerprint],
+        "benchmark_revision_ref": {"record_id": benchmark, "record_type": "benchmark_revision"},
+        "conditions": [{
+            "condition_id": evaluation_id,
+            "role": if family > 0 { "treatment" } else { "comparison" },
+            "system_fingerprint_ref": fingerprint,
+        }],
+        "sampling": {
+            "sampling_unit": "task_condition_replicate",
+            "task_selection_method": declaration.task_selection_method,
+            "planned_trial_count": schedule.trials.len(),
+            "replicates_per_task_condition": per_task.values().copied().max().unwrap_or(1),
+            "randomization_method": "none",
+            "concurrency": schedule.max_active_runs.max(1),
+        },
+        "retry_policy": {
+            "max_run_attempts_per_trial": schedule.retry_policy.max_attempts_per_trial.max(1),
+            "retryable_reasons": schedule.retry_policy.retryable_execution_failure_codes,
+            "eligible_attempt_selection": "last_valid_attempt",
+            "replay_policy": "prohibited",
+        },
+        "metrics": [{
+            "metric_id": METRIC_ID,
+            "role": "primary",
+            "definition_ref": {"record_id": METRIC_RECORD_ID, "record_type": "metric_definition"},
+            "aggregation": "proportion",
+        }],
+        "analysis_plan": analysis_plan,
+    });
+    let content_digest = digest(&body);
+    if let Some(existing) = meta.get_record(&plan_id)? {
+        let frozen_at = existing["frozen_at"].as_str().unwrap_or("").to_string();
+        if existing["content_digest"] == content_digest.as_str() {
+            return Ok(FreezeOutcome::AlreadyFrozen { plan_id, frozen_at });
+        }
+        return Err(StoreError::InvalidRecord(format!(
+            "plan {plan_id} was frozen at {frozen_at} with different content; a frozen plan cannot change, so give a changed plan a new plan_ref (and evaluation_ref)"
+        )));
+    }
+    if meta.get_record(METRIC_RECORD_ID)?.is_none() {
+        meta.put_record(&metric_definition())?;
+    }
+    let frozen_at = now();
+    let mut record = body;
+    if let Some(map) = record.as_object_mut() {
+        map.insert("created_at".into(), json!(frozen_at));
+        map.insert("provenance".into(), provenance(&evaluation_id));
+        map.insert("frozen_at".into(), json!(frozen_at));
+        map.insert("content_digest".into(), json!(content_digest));
+    }
+    meta.put_record(&record)?;
+    Ok(FreezeOutcome::Frozen { plan_id, frozen_at })
 }
 
 fn metric_definition() -> Value {
@@ -758,12 +1163,17 @@ impl Rng {
     }
 }
 
-fn percentile_interval(mut samples: Vec<f64>) -> (f64, f64) {
+fn percentile_interval(samples: Vec<f64>) -> (f64, f64) {
+    percentile_interval_at(samples, CONFIDENCE_LEVEL)
+}
+
+fn percentile_interval_at(mut samples: Vec<f64>, confidence: f64) -> (f64, f64) {
+    let tail = (1.0 - confidence) / 2.0;
     samples.sort_by(f64::total_cmp);
     let at = |q: f64| {
         samples[((q * (samples.len() - 1) as f64).round() as usize).min(samples.len() - 1)]
     };
-    (at(0.025), at(0.975))
+    (at(tail), at(1.0 - tail))
 }
 
 /// Percentile bootstrap of a ratio of sums, resampling (passes, n) clusters.
@@ -783,8 +1193,13 @@ pub fn cluster_bootstrap(clusters: &[(u64, u64)], seed: u64) -> (f64, f64) {
     percentile_interval(samples)
 }
 
-/// Percentile bootstrap of the paired difference, resampling tasks.
+/// Percentile bootstrap of the paired difference, resampling tasks (95%).
 pub fn paired_bootstrap(pairs: &[TaskPair], seed: u64) -> (f64, f64) {
+    paired_bootstrap_at(pairs, seed, CONFIDENCE_LEVEL)
+}
+
+/// Percentile bootstrap of the paired difference at a given confidence level.
+pub fn paired_bootstrap_at(pairs: &[TaskPair], seed: u64, confidence: f64) -> (f64, f64) {
     let mut rng = Rng(seed);
     let samples = (0..BOOTSTRAP_REPLICATES)
         .map(|_| {
@@ -799,7 +1214,7 @@ pub fn paired_bootstrap(pairs: &[TaskPair], seed: u64) -> (f64, f64) {
             tp as f64 / tn.max(1) as f64 - bp as f64 / bn.max(1) as f64
         })
         .collect();
-    percentile_interval(samples)
+    percentile_interval_at(samples, confidence)
 }
 
 #[cfg(test)]
@@ -868,6 +1283,9 @@ mod tests {
             benchmark_digest: "b".repeat(64),
             task_population_digest: "a".repeat(64),
             system_fingerprint_digest: "f".repeat(64),
+            plan_id: format!("PLAN-{id}"),
+            frozen_plan: None,
+            first_result_at: None,
         }
     }
 
@@ -955,5 +1373,150 @@ mod tests {
         let n = compare(&b, &pass_rate(&b), &other, &pass_rate(&other));
         assert_eq!((n.status, n.difference), ("not_comparable", None));
         assert_eq!(n.mismatches, vec!["task_population".to_string()]);
+    }
+
+    fn plan(comparisons: Value, frozen_at: &str) -> Value {
+        json!({
+            "record_type": "evaluation_plan",
+            "lifecycle_state": "frozen",
+            "frozen_at": frozen_at,
+            "content_digest": "d".repeat(64),
+            "analysis_plan": {"comparisons": comparisons},
+        })
+    }
+
+    fn declared(
+        id: &str,
+        alpha: f64,
+        multiplicity: &str,
+        minimum: u64,
+        threshold: Option<f64>,
+    ) -> Value {
+        let mut item = json!({
+            "comparison_id": id,
+            "metric_id": METRIC_ID,
+            "baseline_condition_id": "BASE",
+            "treatment_condition_id": "TREAT",
+            "design": "blocked_paired",
+            "hypothesis": "two_sided",
+            "alpha": alpha,
+            "multiplicity_method": multiplicity,
+            "minimum_matched_units": minimum,
+        });
+        if let Some(t) = threshold {
+            item["practical_significance_threshold"] = json!(t);
+        }
+        item
+    }
+
+    #[test]
+    fn predeclared_comparisons_are_confirmatory_only_when_frozen_first() {
+        use TrialOutcome::*;
+        let tasks: Vec<String> = (0..12).map(|i| format!("t{i}")).collect();
+        let base: Vec<_> = tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.as_str(), if i < 4 { Pass } else { Fail }))
+            .collect();
+        let treat: Vec<_> = tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.as_str(), if i < 11 { Pass } else { Fail }))
+            .collect();
+        let b = outcomes("BASE", &base);
+        let after = |t: &str| Some(DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc));
+        let run = |plan_value: Value, first: &str| {
+            let mut t = outcomes("TREAT", &treat);
+            t.frozen_plan = Some(plan_value);
+            t.first_result_at = after(first);
+            compare(&b, &pass_rate(&b), &t, &pass_rate(&t))
+        };
+
+        // Frozen before the first treatment result: confirmatory, declared rule applied.
+        let single = json!([declared(
+            "b-vs-a",
+            0.05,
+            "none_predeclared_single_test",
+            10,
+            Some(0.2)
+        )]);
+        let c = run(
+            plan(single.clone(), "2026-11-19T10:00:00.000Z"),
+            "2026-11-19T10:05:00.000Z",
+        );
+        assert_eq!(c.inferential_status, "confirmatory", "{:?}", c.limitations);
+        assert_eq!(c.declared_comparison_id.as_deref(), Some("b-vs-a"));
+        assert_eq!(c.direction, "favors_treatment");
+        assert!((c.confidence_level - 0.95).abs() < 1e-12);
+        assert_eq!(c.practical_significance, "meaningful");
+        assert!(c
+            .limitations
+            .iter()
+            .any(|l| l.contains("McNemar exact test at level 0.0500")));
+
+        // Frozen after results already existed: stays exploratory and says why.
+        let late = run(
+            plan(single, "2026-11-19T10:10:00.000Z"),
+            "2026-11-19T10:05:00.000Z",
+        );
+        assert_eq!(late.inferential_status, "exploratory");
+        assert!(
+            late.limitations
+                .iter()
+                .any(|l| l.contains("already had results")),
+            "{:?}",
+            late.limitations
+        );
+
+        // Declared minimum not met.
+        let strict = json!([declared(
+            "b-vs-a",
+            0.05,
+            "none_predeclared_single_test",
+            50,
+            None
+        )]);
+        let few = run(
+            plan(strict, "2026-11-19T10:00:00.000Z"),
+            "2026-11-19T10:05:00.000Z",
+        );
+        assert_eq!(few.inferential_status, "exploratory");
+        assert!(few
+            .limitations
+            .iter()
+            .any(|l| l.contains("declared minimum of 50")));
+
+        // Two declared comparisons: Bonferroni halves alpha; p = 0.0156 still passes 0.025.
+        let two = json!([
+            declared("b-vs-a", 0.05, "bonferroni", 10, None),
+            {"comparison_id": "c-vs-a", "metric_id": METRIC_ID, "baseline_condition_id": "BASE", "treatment_condition_id": "OTHER", "design": "blocked_paired", "hypothesis": "two_sided", "alpha": 0.05, "multiplicity_method": "bonferroni", "minimum_matched_units": 10}
+        ]);
+        let c = run(
+            plan(two, "2026-11-19T10:00:00.000Z"),
+            "2026-11-19T10:05:00.000Z",
+        );
+        assert_eq!(
+            (c.inferential_status, c.family_size, c.multiplicity_method),
+            ("confirmatory", 2, "bonferroni")
+        );
+        assert!((c.confidence_level - 0.975).abs() < 1e-12);
+        assert_eq!(c.direction, "favors_treatment");
+
+        // A stricter alpha the data cannot meet: confirmatory, but no direction.
+        let tight = json!([declared(
+            "b-vs-a",
+            0.01,
+            "none_predeclared_single_test",
+            10,
+            None
+        )]);
+        let c = run(
+            plan(tight, "2026-11-19T10:00:00.000Z"),
+            "2026-11-19T10:05:00.000Z",
+        );
+        assert_eq!(
+            (c.inferential_status, c.direction),
+            ("confirmatory", "undetermined")
+        );
     }
 }

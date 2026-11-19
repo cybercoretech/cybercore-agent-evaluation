@@ -6,6 +6,7 @@ use cybercore_evaluation_core::{
     RunnerError,
 };
 use cybercore_evaluation_judge::{Inspect, JudgeCriterion, ModelJudgeConfig, ModelJudgeVerifier};
+use cybercore_evaluation_store::analysis::{ComparisonDeclaration, PlanDeclaration};
 use cybercore_evaluation_store::{
     Check, ChecksVerifier, CompositeVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
 };
@@ -37,6 +38,60 @@ pub struct EvaluationFile {
     /// rules; trials whose task revision is absent use the default rules.
     #[serde(default)]
     pub task_revisions: Vec<Value>,
+    /// Predeclared analysis (ADR-0021). Frozen as the schedule's
+    /// `plan_ref` before the first trial runs, and never changed after.
+    #[serde(default)]
+    pub analysis_plan: Option<AnalysisPlanSpec>,
+}
+
+/// The decision this evaluation informs, and the comparisons it declares in
+/// advance. This evaluation is the treatment of each comparison.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisPlanSpec {
+    pub decision_question: String,
+    /// census, random, stratified_random, curated (default) or other.
+    #[serde(default = "default_task_selection")]
+    pub task_selection_method: String,
+    #[serde(default)]
+    pub comparisons: Vec<ComparisonSpec>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonSpec {
+    pub comparison_id: String,
+    pub baseline_evaluation_id: String,
+    /// Two-sided significance level; Bonferroni-split across comparisons.
+    #[serde(default = "default_alpha")]
+    pub alpha: f64,
+    #[serde(default = "default_minimum_matched_tasks")]
+    pub minimum_matched_tasks: u64,
+    /// Smallest pass-rate difference that matters (0–1), if any.
+    #[serde(default)]
+    pub practical_significance_threshold: Option<f64>,
+}
+
+fn default_task_selection() -> String {
+    "curated".into()
+}
+
+fn default_alpha() -> f64 {
+    0.05
+}
+
+fn default_minimum_matched_tasks() -> u64 {
+    10
+}
+
+const TASK_SELECTION: &[&str] = &["census", "random", "stratified_random", "curated", "other"];
+
+/// `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`: a record or condition ID.
+fn valid_record_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.len() <= 128
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
 }
 
 #[derive(Debug, Deserialize)]
@@ -516,7 +571,126 @@ impl EvaluationFile {
             }
         }
         self.check_verifier(&self.verifier, "verifier", true)?;
+        if let Some(plan) = &self.analysis_plan {
+            self.check_analysis_plan(plan)?;
+        }
         Ok(())
+    }
+
+    fn check_analysis_plan(&self, plan: &AnalysisPlanSpec) -> Result<(), String> {
+        let question = plan.decision_question.trim();
+        if question.is_empty() || question.len() > 4096 {
+            return Err("analysis_plan.decision_question must be 1 to 4096 characters".into());
+        }
+        if !TASK_SELECTION.contains(&plan.task_selection_method.as_str()) {
+            return Err(format!(
+                "analysis_plan.task_selection_method must be one of {}",
+                TASK_SELECTION.join(", ")
+            ));
+        }
+        let fingerprints: BTreeSet<&str> = self
+            .schedule
+            .trials
+            .iter()
+            .map(|t| t.system_fingerprint_ref.record_id.as_str())
+            .collect();
+        if fingerprints.len() > 1 {
+            return Err(
+                "analysis_plan needs every trial to share one system_fingerprint_ref (one condition per evaluation)"
+                    .into(),
+            );
+        }
+        let mut ids = BTreeSet::new();
+        let mut baselines = BTreeSet::new();
+        for (index, c) in plan.comparisons.iter().enumerate() {
+            let at = format!("analysis_plan.comparisons[{index}]");
+            if !valid_record_id(&c.comparison_id) || !ids.insert(c.comparison_id.as_str()) {
+                return Err(format!(
+                    "{at}.comparison_id must be a unique ID ([A-Za-z0-9][A-Za-z0-9._:-]{{0,127}})"
+                ));
+            }
+            if !valid_record_id(&c.baseline_evaluation_id) {
+                return Err(format!(
+                    "{at}.baseline_evaluation_id must be an evaluation record ID"
+                ));
+            }
+            if c.baseline_evaluation_id == self.evaluation_id() {
+                return Err(format!(
+                    "{at}.baseline_evaluation_id must be another evaluation, not this one"
+                ));
+            }
+            if !baselines.insert(c.baseline_evaluation_id.as_str()) {
+                return Err(format!(
+                    "{at} compares against {} again; declare each baseline once",
+                    c.baseline_evaluation_id
+                ));
+            }
+            if !(c.alpha > 0.0 && c.alpha <= 0.2) {
+                return Err(format!("{at}.alpha must be greater than 0 and at most 0.2"));
+            }
+            if c.minimum_matched_tasks < 5 {
+                return Err(format!(
+                    "{at}.minimum_matched_tasks must be at least 5 (fewer tasks cannot give an interval)"
+                ));
+            }
+            if c.practical_significance_threshold
+                .is_some_and(|t| !(0.0..=1.0).contains(&t))
+            {
+                return Err(format!(
+                    "{at}.practical_significance_threshold must be between 0 and 1"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The declaration to freeze, if the file has an `analysis_plan`.
+    pub fn plan_declaration(&self) -> Option<PlanDeclaration> {
+        let plan = self.analysis_plan.as_ref()?;
+        let task_families: BTreeSet<String> = self
+            .task_revisions
+            .iter()
+            .filter_map(|t| t["task_family"].as_str().map(str::to_string))
+            .collect();
+        let runner = match &self.runner {
+            RunnerSpec::LocalBubblewrap { .. } => "runner: local_bubblewrap".to_string(),
+            RunnerSpec::Podman { images, .. } => format!(
+                "runner: podman ({})",
+                images.values().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        };
+        let mut networks = BTreeSet::new();
+        for trial in &self.schedule.trials {
+            networks.insert(match &trial.network_policy {
+                NetworkPolicy::DenyAll => "network: deny_all".to_string(),
+                NetworkPolicy::Allowlist { hosts } => {
+                    format!("network: allowlist {}", hosts.join(","))
+                }
+            });
+        }
+        let mut operating_conditions = vec![runner];
+        operating_conditions.extend(networks);
+        operating_conditions.push(format!("verifier: {}", self.verifier_summary()));
+        Some(PlanDeclaration {
+            decision_question: plan.decision_question.trim().to_string(),
+            task_selection_method: plan.task_selection_method.clone(),
+            task_families: task_families.into_iter().collect(),
+            operating_conditions: operating_conditions
+                .into_iter()
+                .map(|c| c.chars().take(512).collect())
+                .collect(),
+            comparisons: plan
+                .comparisons
+                .iter()
+                .map(|c| ComparisonDeclaration {
+                    comparison_id: c.comparison_id.clone(),
+                    baseline_evaluation_id: c.baseline_evaluation_id.clone(),
+                    alpha: c.alpha,
+                    minimum_matched_tasks: c.minimum_matched_tasks,
+                    practical_significance_threshold: c.practical_significance_threshold,
+                })
+                .collect(),
+        })
     }
 
     /// Validates one verifier spec; `at_root` is its field path for errors.

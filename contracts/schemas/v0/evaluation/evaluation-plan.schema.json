@@ -319,6 +319,80 @@
                 "minLength": 1,
                 "maxLength": 2048
               }
+            },
+            "comparisons": {
+              "description": "Predeclared pairwise comparisons. A comparison result may be confirmatory only when the plan was frozen before the treatment's results existed and the declared rule was applied unchanged.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "comparison_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "metric_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "baseline_condition_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "treatment_condition_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "design": {
+                    "type": "string",
+                    "enum": [
+                      "blocked_paired",
+                      "randomized_paired",
+                      "randomized_unpaired",
+                      "crossover"
+                    ]
+                  },
+                  "hypothesis": {
+                    "type": "string",
+                    "enum": [
+                      "two_sided"
+                    ]
+                  },
+                  "alpha": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 0.2
+                  },
+                  "multiplicity_method": {
+                    "type": "string",
+                    "enum": [
+                      "none_predeclared_single_test",
+                      "bonferroni",
+                      "holm"
+                    ]
+                  },
+                  "minimum_matched_units": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "practical_significance_threshold": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "comparison_id",
+                  "metric_id",
+                  "baseline_condition_id",
+                  "treatment_condition_id",
+                  "design",
+                  "hypothesis",
+                  "alpha",
+                  "multiplicity_method",
+                  "minimum_matched_units"
+                ],
+                "additionalProperties": false
+              },
+              "uniqueItems": true
             }
           },
           "required": [

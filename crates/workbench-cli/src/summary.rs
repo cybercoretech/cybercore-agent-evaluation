@@ -112,8 +112,14 @@ fn comparison_json(c: &Comparison, id: &str) -> Value {
         "matched_tasks": c.matched_tasks,
         "difference": c.difference,
         "interval": c.interval.map(|(lower, upper)| json!({
-            "lower": lower, "upper": upper, "method": "paired_bootstrap", "confidence_level": CONFIDENCE_LEVEL,
+            "lower": lower, "upper": upper, "method": "paired_bootstrap", "confidence_level": c.confidence_level,
         })),
+        "inferential_status": c.inferential_status,
+        "declared_comparison_id": c.declared_comparison_id,
+        "multiplicity_method": c.multiplicity_method,
+        "family_size": c.family_size,
+        "practical_significance": c.practical_significance,
+        "practical_significance_threshold": c.practical_significance_threshold,
         "p_value": c.p_value,
         "method": c.method,
         "direction": c.direction,
@@ -161,7 +167,10 @@ pub fn compare_evaluations(
     {
         let interval = comparison
             .interval
-            .map(|(lower, upper)| format!("   95% interval {lower:+.3} to {upper:+.3}"))
+            .map(|(lower, upper)| {
+                let level = comparison.confidence_level * 100.0;
+                format!("   {level:.1}% interval {lower:+.3} to {upper:+.3}")
+            })
             .unwrap_or_default();
         say!(
             "  difference  {difference:+.3}{interval}   (paired over {} task(s))",
@@ -171,7 +180,20 @@ pub fn compare_evaluations(
             say!("  McNemar     p = {p:.4}");
         }
         say!("  direction   {}", comparison.direction.replace('_', " "));
+        if comparison.practical_significance != "not_assessed" {
+            say!(
+                "  practical   {}",
+                comparison.practical_significance.replace('_', " ")
+            );
+        }
     }
+    let inference = match &comparison.declared_comparison_id {
+        Some(id) if comparison.inferential_status == "confirmatory" => {
+            format!("confirmatory (predeclared as {id})")
+        }
+        _ => comparison.inferential_status.replace('_', " "),
+    };
+    say!("  inference   {inference}");
     say!("  status      {}", comparison.status.replace('_', " "));
     for (index, note) in comparison.limitations.iter().enumerate() {
         say!(

@@ -66,7 +66,9 @@ jobs:
           cargo run --locked -q -p cybercore-evaluation-store --example durable_evaluation -- "$dir" | tee "$RUNNER_TEMP/resume.txt"
           grep -q 'interrupted attempts: \["REQ-TRIAL-3-A1"\]' "$RUNNER_TEMP/resume.txt"
           grep -q 'RUN-TRIAL-4-A1 .*verified_fail' "$RUNNER_TEMP/resume.txt"
-      - name: workbench CLI against the real sandbox (skips are failures here)
+      - name: Workspace output collection and workbench CLI in the real sandbox (skips are failures here)
         env:
           WORKBENCH_REQUIRE_BWRAP: "1"
-        run: cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture run_executes_records_and_resumes_idempotently
+        run: |
+          cargo test --locked -p cybercore-evaluation-core --test workspace_outputs_bwrap -- --nocapture
+          cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture

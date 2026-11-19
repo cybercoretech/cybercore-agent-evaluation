@@ -162,13 +162,19 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
             .map_err(|e| format!("task_revisions: {e}"))?;
     }
 
-    let runner = LocalProcessRunner::new(evaluation.runner_config(store_dir.join("runner-tmp")))
-        .map_err(|e| format!("runner: {e}"))?;
-    let config = RunRecorderConfig::for_runner(
+    let artifact_root = store_dir.join("runner-artifacts");
+    let runner = LocalProcessRunner::new(
+        evaluation.runner_config(store_dir.join("runner-tmp"), artifact_root.clone()),
+    )
+    .map_err(|e| format!("runner: {e}"))?;
+    let mut config = RunRecorderConfig::for_runner(
         &runner,
         evaluation.project_ref.clone(),
         evaluation.store_output_evidence,
     );
+    if evaluation.collects_outputs() {
+        config = config.with_artifact_root(artifact_root);
+    }
     let verifier = evaluation.verifier();
 
     let (mut scheduler, recovery) = DurableScheduler::acquire(
@@ -196,7 +202,7 @@ fn run(store_dir: &Path, file: &Path, dry_run: bool) -> Result<(), String> {
             &mut scheduler,
             &runner,
             &config,
-            &verifier,
+            verifier.as_ref(),
             move |trial_id, attempt| identity(&eval_for_ids, trial_id, attempt),
         ))
         .map_err(|e| format!("{evaluation_id}: {e}"))?;
@@ -439,12 +445,17 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
     for trial in &evaluation.schedule.trials {
         let id = &trial.trial_ref.record_id;
         let executable = trial.task_input["executable_id"].as_str().unwrap_or("?");
+        let collects = if trial.task_input["collect_outputs"] == serde_json::Value::Bool(true) {
+            " collects=/workspace/output"
+        } else {
+            ""
+        };
         let note = if unverifiable.contains(&id.as_str()) {
             "  (no expectation: will be recorded as verification unavailable)"
         } else {
             ""
         };
-        say!("  {id:<24} executable={executable}{note}");
+        say!("  {id:<24} executable={executable}{collects}{note}");
     }
     Ok(())
 }

@@ -16,7 +16,7 @@ Provider-independent Rust library for the CyberCore Agent Evaluation Workbench.
 - Durable scheduler, distributed semaphore, persistence, idempotency store, or crash recovery.
 - Cloudflare, HTTP, MCP, database, object-store, or queue adapters.
 - Statistical estimation, grading, or independent verification implementation.
-- Artifact export from the local process workspace; outputs remain ephemeral until an artifact/evidence-store adapter is implemented.
+- Exporting the whole workspace. Only regular files a task leaves in `/workspace/output` with `collect_outputs` are collected (ADR-0014); everything else stays ephemeral.
 - A guarantee that the local runner is suitable for hostile multi-tenant workloads. It has no aggregate cgroup memory/CPU/process-count limits, and the executable allowlist does not prevent child processes from invoking other binaries visible in `/usr`.
 - Secret delivery to task arguments/environment. Those values appear in the host-side Bubblewrap argv; stdout/stderr are also unredacted. Use no secrets or sensitive data with this prototype unless the host and evidence handling are explicitly trusted.
 - A guarantee that a runner implementation is isolated. Each adapter must prove its own controls and capabilities.

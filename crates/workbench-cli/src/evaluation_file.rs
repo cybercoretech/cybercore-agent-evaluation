@@ -4,6 +4,7 @@ use cybercore_evaluation_core::{
     ContainerRunner, ContainerRunnerConfig, EvaluationSchedule, LocalProcessRunner,
     LocalProcessRunnerConfig, RecordReference, Runner, RunnerError,
 };
+use cybercore_evaluation_judge::{Inspect, JudgeCriterion, ModelJudgeConfig, ModelJudgeVerifier};
 use cybercore_evaluation_store::{
     Check, ChecksVerifier, CriterionCheck, StdoutEqualsVerifier, Verifier,
 };
@@ -147,7 +148,35 @@ pub enum VerifierSpec {
     Checks {
         checks: BTreeMap<String, Vec<CheckSpec>>,
     },
+    /// A Claude model judges each criterion's rubric (ADR-0017). Judged
+    /// outputs are sent to the Anthropic API, so this requires explicit
+    /// consent; credentials come only from ANTHROPIC_API_KEY or
+    /// ANTHROPIC_AUTH_TOKEN.
+    ModelJudge {
+        consent_to_send_outputs: bool,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+        #[serde(default)]
+        max_input_bytes: Option<usize>,
+        criteria: BTreeMap<String, Vec<JudgeCriterionSpec>>,
+    },
 }
+
+/// One judged criterion. Without `file`, the judge reads stdout.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JudgeCriterionSpec {
+    pub criterion_id: String,
+    /// What "pass" means, in plain language (hidden from the agent).
+    pub rubric: String,
+    /// A collected `/workspace/output` file to judge instead of stdout.
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// One criterion in a `checks` verifier. Paths are relative to
 /// `/workspace/output`.
@@ -393,6 +422,70 @@ impl EvaluationFile {
                     ));
                 }
             }
+            VerifierSpec::ModelJudge {
+                consent_to_send_outputs,
+                effort,
+                max_input_bytes,
+                criteria,
+                ..
+            } => {
+                if !consent_to_send_outputs {
+                    return Err("verifier.consent_to_send_outputs must be true: the judged outputs are sent to the Anthropic API".into());
+                }
+                if let Some(effort) = effort {
+                    if !EFFORTS.contains(&effort.as_str()) {
+                        return Err(format!(
+                            "verifier.effort {effort:?} must be one of low, medium, high, xhigh, max"
+                        ));
+                    }
+                }
+                if *max_input_bytes == Some(0) {
+                    return Err("verifier.max_input_bytes must be positive".into());
+                }
+                for (trial_id, specs) in criteria {
+                    let Some(trial) = self
+                        .schedule
+                        .trials
+                        .iter()
+                        .find(|t| &t.trial_ref.record_id == trial_id)
+                    else {
+                        return Err(format!(
+                            "verifier.criteria.{trial_id} does not name a trial in the schedule"
+                        ));
+                    };
+                    let mut seen = BTreeSet::new();
+                    for (index, spec) in specs.iter().enumerate() {
+                        let at = format!("verifier.criteria.{trial_id}[{index}]");
+                        if !valid_criterion_id(&spec.criterion_id) {
+                            return Err(format!(
+                                "{at}.criterion_id {:?} must match [A-Za-z0-9][A-Za-z0-9._:-]{{0,63}}",
+                                spec.criterion_id
+                            ));
+                        }
+                        if !seen.insert(spec.criterion_id.as_str()) {
+                            return Err(format!(
+                                "{at}.criterion_id {:?} is repeated",
+                                spec.criterion_id
+                            ));
+                        }
+                        if spec.rubric.trim().is_empty() {
+                            return Err(format!("{at}.rubric must not be empty"));
+                        }
+                        if let Some(path) = &spec.file {
+                            if !valid_output_path(path) {
+                                return Err(format!(
+                                    "{at}.file {path:?} must be relative to /workspace/output without '..'"
+                                ));
+                            }
+                            if !collects_outputs(trial) {
+                                return Err(format!(
+                                    "{at} judges a file, but schedule.trials[{trial_id}].task_input.collect_outputs is not true"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             VerifierSpec::Checks { checks } => {
                 for (trial_id, specs) in checks {
                     let Some(trial) = self
@@ -446,6 +539,9 @@ impl EvaluationFile {
         let configured = |id: &str| match &self.verifier {
             VerifierSpec::StdoutEquals { expected } => expected.contains_key(id),
             VerifierSpec::Checks { checks } => checks.get(id).is_some_and(|c| !c.is_empty()),
+            VerifierSpec::ModelJudge { criteria, .. } => {
+                criteria.get(id).is_some_and(|c| !c.is_empty())
+            }
         };
         self.schedule
             .trials
@@ -453,6 +549,23 @@ impl EvaluationFile {
             .map(|t| t.trial_ref.record_id.as_str())
             .filter(|id| !configured(id))
             .collect()
+    }
+
+    /// One line describing the verifier for `--dry-run`.
+    pub fn verifier_summary(&self) -> String {
+        match &self.verifier {
+            VerifierSpec::StdoutEquals { .. } => "stdout_equals (deterministic)".into(),
+            VerifierSpec::Checks { .. } => "checks (deterministic)".into(),
+            VerifierSpec::ModelJudge { model, effort, .. } => format!(
+                "model_judge ({}, effort {}): judged outputs are sent to the Anthropic API",
+                model
+                    .as_deref()
+                    .unwrap_or(cybercore_evaluation_judge::DEFAULT_MODEL),
+                effort
+                    .as_deref()
+                    .unwrap_or(cybercore_evaluation_judge::DEFAULT_EFFORT)
+            ),
+        }
     }
 
     /// True when any trial asks the runner to collect `/workspace/output`.
@@ -542,6 +655,42 @@ impl EvaluationFile {
         match &self.verifier {
             VerifierSpec::StdoutEquals { expected } => {
                 Box::new(StdoutEqualsVerifier::new(expected.clone()))
+            }
+            VerifierSpec::ModelJudge {
+                model,
+                effort,
+                max_input_bytes,
+                criteria,
+                ..
+            } => {
+                let criteria = criteria
+                    .iter()
+                    .map(|(trial, specs)| {
+                        let judged = specs
+                            .iter()
+                            .map(|spec| JudgeCriterion {
+                                criterion_id: spec.criterion_id.clone(),
+                                rubric: spec.rubric.clone(),
+                                inspect: match &spec.file {
+                                    Some(path) => Inspect::File(path.clone()),
+                                    None => Inspect::Stdout,
+                                },
+                            })
+                            .collect();
+                        (trial.clone(), judged)
+                    })
+                    .collect();
+                let mut config = ModelJudgeConfig::new(criteria);
+                if let Some(model) = model {
+                    config = config.with_model(model.clone());
+                }
+                if let Some(effort) = effort {
+                    config.effort = effort.clone();
+                }
+                if let Some(limit) = max_input_bytes {
+                    config.max_input_bytes = *limit;
+                }
+                Box::new(ModelJudgeVerifier::new(config))
             }
             VerifierSpec::Checks { checks } => Box::new(ChecksVerifier::new(
                 checks

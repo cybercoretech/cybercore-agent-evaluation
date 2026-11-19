@@ -20,7 +20,9 @@ use cybercore_evaluation_core::{
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 const SCHEMA_VERSION: &str = "0.1.0";
 const COMPONENT: &str = "cybercore-evaluation-store/run-recorder";
@@ -114,6 +116,17 @@ pub struct VerificationInput<'a> {
 pub trait Verifier {
     fn identity(&self) -> VerifierIdentity;
     fn verify(&self, input: &VerificationInput<'_>) -> Vec<CriterionVerdict>;
+
+    /// Asynchronous form, used by `run_ready_trials` so that a slow verifier
+    /// (a model judge, an external service) never pauses other attempts that
+    /// are still executing. The default runs [`Verifier::verify`]; override
+    /// it when verification waits on I/O. Crash catch-up uses `verify`.
+    fn verify_async<'a>(
+        &'a self,
+        input: &'a VerificationInput<'a>,
+    ) -> Pin<Box<dyn Future<Output = Vec<CriterionVerdict>> + 'a>> {
+        Box::pin(std::future::ready(self.verify(input)))
+    }
 }
 
 /// Deterministic verifier: the runner's captured `stdout` must equal the
@@ -250,6 +263,8 @@ pub(crate) struct CompletedAttempt<'a> {
     pub(crate) identity: &'a AttemptIdentity,
     pub(crate) result: &'a Result<RunnerResult, RunnerError>,
     pub(crate) reserved_at: &'a str,
+    /// Verdicts already produced (asynchronously) for a finished execution.
+    pub(crate) verdicts: Option<&'a [CriterionVerdict]>,
 }
 
 /// Everything needed to describe one resolved attempt.
@@ -263,6 +278,8 @@ struct ResolvedAttempt<'a> {
     result: &'a Result<RunnerResult, RunnerError>,
     reserved_at: &'a str,
     completed_at: &'a str,
+    /// Verdicts produced before recording; `None` means verify now.
+    verdicts: Option<&'a [CriterionVerdict]>,
 }
 
 impl LocalStore {
@@ -363,6 +380,7 @@ impl LocalStore {
                             result: &complete.result,
                             reserved_at,
                             completed_at: &entry.recorded_at,
+                            verdicts: None,
                         },
                         config,
                         verifier,
@@ -399,6 +417,7 @@ impl LocalStore {
             identity,
             result,
             reserved_at,
+            verdicts,
         } = *attempt;
         let snapshot = scheduler
             .coordinator()
@@ -426,6 +445,7 @@ impl LocalStore {
                 result,
                 reserved_at,
                 completed_at: &completed_at,
+                verdicts,
             },
             config,
             verifier,
@@ -474,12 +494,7 @@ impl LocalStore {
 
         // Collected workspace files: verified against their manifests, given to
         // the verifier, and stored as evidence under the same attestation.
-        let staging = match (&config.artifact_root, attempt.result) {
-            (Some(root), Ok(result)) if !result.artifacts.is_empty() => {
-                Some(artifact_staging_dir(root, &attempt.identity.request_id))
-            }
-            _ => None,
-        };
+        let staging = staging_dir(config, &attempt.identity.request_id, attempt.result);
         let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         let mut file_evidence: BTreeMap<String, Value> = BTreeMap::new();
         if let (Some(staging), Ok(result)) = (&staging, attempt.result) {
@@ -564,12 +579,15 @@ impl LocalStore {
         );
         if let (true, Ok(result)) = (finished, attempt.result) {
             let identity = verifier.identity();
-            let verdicts = verifier.verify(&VerificationInput {
-                trial: attempt.trial,
-                run_ref,
-                result,
-                files: &files,
-            });
+            let verdicts = match attempt.verdicts {
+                Some(verdicts) => verdicts.to_vec(),
+                None => verifier.verify(&VerificationInput {
+                    trial: attempt.trial,
+                    run_ref,
+                    result,
+                    files: &files,
+                }),
+            };
             let terminal_event: Vec<Value> = event_refs
                 .last()
                 .map(|event| {
@@ -824,6 +842,37 @@ impl OutcomePolicy {
         }
         "pass"
     }
+}
+
+fn staging_dir(
+    config: &RunRecorderConfig,
+    request_id: &str,
+    result: &Result<RunnerResult, RunnerError>,
+) -> Option<PathBuf> {
+    match (&config.artifact_root, result) {
+        (Some(root), Ok(result)) if !result.artifacts.is_empty() => {
+            Some(artifact_staging_dir(root, request_id))
+        }
+        _ => None,
+    }
+}
+
+/// Collected workspace files of a result, each verified against its manifest
+/// (missing or altered copies are left out), for handing to verifiers.
+pub(crate) fn staged_files(
+    config: &RunRecorderConfig,
+    request_id: &str,
+    result: &Result<RunnerResult, RunnerError>,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    if let (Some(staging), Ok(result)) = (staging_dir(config, request_id, result), result) {
+        for manifest in &result.artifacts {
+            if let Some(bytes) = read_staged(&staging, manifest) {
+                files.insert(manifest.artifact_id.clone(), bytes);
+            }
+        }
+    }
+    files
 }
 
 /// Reads a staged workspace file if it is a regular file whose length and

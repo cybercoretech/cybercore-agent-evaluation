@@ -1,0 +1,207 @@
+{
+  "format": "cybercore-workbench-evaluation/v0",
+  "schedule": {
+    "evaluation_ref": {
+      "record_id": "EVAL-MODEL-JUDGE",
+      "record_type": "evaluation"
+    },
+    "plan_ref": {
+      "record_id": "PLAN-MODEL-JUDGE",
+      "record_type": "evaluation_plan"
+    },
+    "max_active_runs": 2,
+    "retry_policy": {
+      "max_attempts_per_trial": 2,
+      "retry_retryable_runner_errors": true,
+      "retryable_execution_failure_codes": [],
+      "retry_timeouts": false
+    },
+    "trials": [
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-GREETING",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-CAT",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "cat",
+          "args": [
+            "/workspace/input/greeting.txt"
+          ],
+          "files": [
+            {
+              "path": "greeting.txt",
+              "content": "hello from the sandbox\n"
+            }
+          ],
+          "environment": {}
+        },
+        "budget": {
+          "max_wall_time_ms": 10000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 0,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "deny_all"
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      },
+      {
+        "trial_ref": {
+          "record_id": "TRIAL-NUMBERS",
+          "record_type": "trial"
+        },
+        "task_revision_ref": {
+          "record_id": "TASK-CAT",
+          "record_type": "task_revision"
+        },
+        "system_fingerprint_ref": {
+          "record_id": "FP-LOCAL-CAT",
+          "record_type": "system_fingerprint"
+        },
+        "task_input": {
+          "executable_id": "cat",
+          "args": [
+            "/workspace/input/numbers.txt"
+          ],
+          "files": [
+            {
+              "path": "numbers.txt",
+              "content": "1\n2\n3\n"
+            }
+          ],
+          "environment": {}
+        },
+        "budget": {
+          "max_wall_time_ms": 10000,
+          "max_output_bytes": 4096,
+          "max_artifact_bytes": 0,
+          "max_tool_calls": 0,
+          "max_input_tokens": null,
+          "max_output_tokens": null
+        },
+        "network_policy": {
+          "mode": "deny_all"
+        },
+        "side_effect_policy": {
+          "mode": "deny_all"
+        },
+        "capability_grant_refs": []
+      }
+    ]
+  },
+  "runner": {
+    "type": "local_bubblewrap",
+    "allowed_executables": {
+      "cat": "/usr/bin/cat"
+    },
+    "limits": {
+      "max_wall_time_ms": 10000,
+      "max_output_bytes": 4096
+    }
+  },
+  "verifier": {
+    "type": "model_judge",
+    "consent_to_send_outputs": true,
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "criteria": {
+      "TRIAL-GREETING": [
+        {
+          "criterion_id": "meets-rubric",
+          "rubric": "The output is a short, friendly greeting addressed to the reader."
+        }
+      ],
+      "TRIAL-NUMBERS": [
+        {
+          "criterion_id": "meets-rubric",
+          "rubric": "The output lists the numbers 1, 2 and 3 in order, one per line, and nothing else."
+        }
+      ]
+    }
+  },
+  "project_ref": {
+    "record_id": "PROJECT-LOCAL",
+    "record_type": "project"
+  },
+  "store_output_evidence": true,
+  "task_revisions": [
+    {
+      "record_id": "TASK-CAT",
+      "record_type": "task_revision",
+      "schema_version": "0.1.0",
+      "created_at": "2026-11-18T00:00:00Z",
+      "provenance": {
+        "source": {
+          "system": "workbench-example",
+          "component": "cat-smoke.json",
+          "component_version": "0.1.0",
+          "origin_id": "cat-smoke"
+        },
+        "captured_by": "workbench-example",
+        "capture_version": "0.1.0"
+      },
+      "benchmark_ref": {
+        "record_id": "BENCH-CAT-SMOKE",
+        "record_type": "benchmark_revision"
+      },
+      "task_key": "cat-file",
+      "revision": 1,
+      "validity_state": "valid",
+      "task_family": "sandbox_smoke",
+      "objective": "Print the provided input file unchanged.",
+      "agent_instruction": "Run cat on the input file.",
+      "inputs": [],
+      "permitted_tools": [
+        "cat"
+      ],
+      "permitted_effects": [
+        "none"
+      ],
+      "constraints": [
+        "No network access."
+      ],
+      "acceptance_criteria": [
+        {
+          "criterion_id": "meets-rubric",
+          "description": "The output meets the trial's rubric.",
+          "verification_requirement": "Judged by a model against the trial's hidden rubric.",
+          "criticality": "mandatory"
+        }
+      ],
+      "prohibited_outcomes": [
+        "Any output other than the file contents."
+      ],
+      "invariants": [
+        "The input file is not modified."
+      ],
+      "verification_plan": {
+        "required_criterion_ids": [
+          "meets-rubric"
+        ],
+        "verifier_refs": [
+          {
+            "record_id": "VERIFIER-STDOUT-EQUALS",
+            "record_type": "verifier"
+          }
+        ],
+        "independent_verification_required": true
+      },
+      "difficulty_stratum": "low",
+      "risk_stratum": "low"
+    }
+  ]
+}

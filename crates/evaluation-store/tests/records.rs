@@ -647,3 +647,90 @@ async fn outcome_rules_follow_the_stored_task_revision() {
         assert_eq!(run["run_outcome"], "invalid");
     }
 }
+
+/// A verifier that waits on I/O: only its async form may be used by the loop.
+struct SlowAsyncVerifier;
+
+impl cybercore_evaluation_store::Verifier for SlowAsyncVerifier {
+    fn identity(&self) -> cybercore_evaluation_store::VerifierIdentity {
+        cybercore_evaluation_store::VerifierIdentity {
+            verifier_id: "slow-async".into(),
+            version: "0".into(),
+            verifier_type: cybercore_evaluation_store::VerifierType::ExternalService,
+        }
+    }
+
+    fn verify(
+        &self,
+        _input: &cybercore_evaluation_store::VerificationInput<'_>,
+    ) -> Vec<cybercore_evaluation_store::CriterionVerdict> {
+        panic!("the scheduler loop must use verify_async");
+    }
+
+    fn verify_async<'a>(
+        &'a self,
+        _input: &'a cybercore_evaluation_store::VerificationInput<'a>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Vec<cybercore_evaluation_store::CriterionVerdict>>
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            vec![cybercore_evaluation_store::CriterionVerdict {
+                criterion_id: "slow-check".into(),
+                inspected_target: "runner-output:stdout".into(),
+                method: "wait, then pass".into(),
+                result: cybercore_evaluation_store::VerdictResult::Pass,
+                limitations: vec![],
+                judge_rationale: None,
+                evidence_paths: vec![],
+            }]
+        })
+    }
+}
+
+#[tokio::test]
+async fn slow_verifiers_run_inside_each_attempt_without_blocking_the_others() {
+    let dir = TempDir::new("slow-verifier");
+    let store = LocalStore::open(&dir.0).unwrap();
+    store
+        .metadata()
+        .create_schedule(&schedule_with(
+            &["T-PASS", "T-FAIL", "T-RETRY", "T-UNKNOWN"],
+            4,
+        ))
+        .unwrap();
+    let runner = ScriptedRunner::new(&[
+        ("T-PASS", &[Script::Stdout("a\n")]),
+        ("T-FAIL", &[Script::Stdout("b\n")]),
+        ("T-RETRY", &[Script::Stdout("c\n")]),
+        ("T-UNKNOWN", &[Script::Stdout("d\n")]),
+    ]);
+    let (mut scheduler, _) =
+        DurableScheduler::acquire(store.metadata(), "EVAL-1", "w", LONG).unwrap();
+    let started = std::time::Instant::now();
+    let report = run_ready_trials(
+        &store,
+        &mut scheduler,
+        &runner,
+        &config(&runner, false),
+        &SlowAsyncVerifier,
+        identity,
+    )
+    .await
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(report.executed.len(), 4);
+    // Four 300 ms verifications overlapped instead of running one after another.
+    assert!(
+        elapsed < std::time::Duration::from_millis(900),
+        "took {elapsed:?}"
+    );
+    assert_eq!(
+        record(&store, "RUN-T-PASS-A1:VERIFY:slow-check")["result"],
+        "pass"
+    );
+    assert_eq!(record(&store, "RUN-T-PASS-A1")["run_outcome"], "pass");
+}

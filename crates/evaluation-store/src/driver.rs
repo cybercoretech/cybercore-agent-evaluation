@@ -4,10 +4,13 @@
 use crate::error::{StoreError, StoreResult};
 use crate::local::LocalStore;
 use crate::metadata::now;
-use crate::recorder::{CompletedAttempt, RecordReport, RunRecorderConfig, Verifier};
+use crate::recorder::{
+    staged_files, CompletedAttempt, CriterionVerdict, RecordReport, RunRecorderConfig,
+    VerificationInput, Verifier,
+};
 use crate::scheduler::DurableScheduler;
 use cybercore_evaluation_core::{
-    execute_with_runner, AttemptIdentity, Runner, RunnerError, RunnerResult,
+    execute_with_runner, AttemptIdentity, ExecutionDisposition, Runner, RunnerError, RunnerResult,
 };
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -30,6 +33,9 @@ struct Executed {
     identity: AttemptIdentity,
     reserved_at: String,
     result: Result<RunnerResult, RunnerError>,
+    /// Verdicts for a finished execution, produced inside this attempt's own
+    /// future so a slow verifier never pauses the other attempts.
+    verdicts: Option<Vec<CriterionVerdict>>,
 }
 
 type Execution<'a> = Pin<Box<dyn Future<Output = Executed> + 'a>>;
@@ -91,13 +97,34 @@ where
             let reserved_at = now();
             let reservation = scheduler.reserve_attempt(&trial_id, identity.clone())?;
             let request = reservation.request;
+            let trial = schedule
+                .trials
+                .iter()
+                .find(|t| t.trial_ref.record_id == trial_id)
+                .ok_or_else(|| {
+                    StoreError::Integrity(format!("schedule has no trial {trial_id}"))
+                })?;
             in_flight.push(Box::pin(async move {
                 let result = execute_with_runner(runner, &request).await;
+                let verdicts = match &result {
+                    Ok(finished) if finished.disposition == ExecutionDisposition::Finished => {
+                        let files = staged_files(config, &request.request_id, &result);
+                        let input = VerificationInput {
+                            trial,
+                            run_ref: &identity.run_ref,
+                            result: finished,
+                            files: &files,
+                        };
+                        Some(verifier.verify_async(&input).await)
+                    }
+                    _ => None,
+                };
                 Executed {
                     trial_id,
                     identity,
                     reserved_at,
                     result,
+                    verdicts,
                 }
             }));
         }
@@ -137,6 +164,7 @@ where
                 identity: &executed.identity,
                 result: &executed.result,
                 reserved_at: &executed.reserved_at,
+                verdicts: executed.verdicts.as_deref(),
             },
             config,
             verifier,

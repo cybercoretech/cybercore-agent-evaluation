@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/evaluation-core",
+    "crates/evaluation-judge",
     "crates/evaluation-store",
     "crates/workbench-cli",
     "contracts/conformance/rust",

@@ -283,7 +283,31 @@ impl LocalStore {
             .map(|t| (t.trial_ref.record_id.as_str(), t))
             .collect();
 
+        // Cheap pass first: the coordinator knows every resolved attempt, so
+        // only read the journal (for runner results) when some lack records.
         let mut report = RecordReport::default();
+        let mut missing: BTreeSet<String> = BTreeSet::new();
+        for trial in &schedule.trials {
+            let snapshot = scheduler
+                .coordinator()
+                .snapshot(&trial.trial_ref.record_id)
+                .map_err(StoreError::Orchestration)?;
+            for attempt in snapshot
+                .attempts
+                .iter()
+                .filter(|a| a.status != AttemptStatus::Reserved)
+            {
+                if self.metadata().record_exists(&attempt.run_ref.record_id)? {
+                    report.already_recorded += 1;
+                } else {
+                    missing.insert(attempt.request_id.clone());
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(report);
+        }
+
         // request_id -> (identity, reserved_at)
         let mut reservations: BTreeMap<String, (AttemptIdentity, String)> = BTreeMap::new();
         for entry in scheduler.store().load_journal_entries(evaluation_id)? {
@@ -302,12 +326,7 @@ impl LocalStore {
                                 complete.request_id
                             ))
                         })?;
-                    if self
-                        .metadata()
-                        .get_record(&identity.run_ref.record_id)?
-                        .is_some()
-                    {
-                        report.already_recorded += 1;
+                    if !missing.contains(&complete.request_id) {
                         continue;
                     }
                     let trial = trials.get(complete.trial_id.as_str()).ok_or_else(|| {

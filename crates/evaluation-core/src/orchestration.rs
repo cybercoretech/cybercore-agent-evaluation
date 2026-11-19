@@ -65,7 +65,8 @@ pub struct EvaluationSchedule {
     pub trials: Vec<TrialDefinition>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TrialExecutionState {
     Ready,
     InFlight,
@@ -75,7 +76,8 @@ pub enum TrialExecutionState {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AttemptStatus {
     Reserved,
     Finished,
@@ -110,7 +112,8 @@ pub struct AttemptIdentity {
     pub idempotency_key: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrialAttempt {
     pub attempt_number: u32,
     pub run_ref: RecordReference,
@@ -191,7 +194,27 @@ impl fmt::Display for OrchestrationError {
 
 impl Error for OrchestrationError {}
 
-#[derive(Debug, Clone)]
+/// Snapshot form of the coordinator's runtime state.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoordinatorState {
+    evaluation_ref: RecordReference,
+    plan_ref: RecordReference,
+    max_active_runs: usize,
+    retry_policy: RetryPolicy,
+    trials: BTreeMap<String, TrialState>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrialState {
+    state: TrialExecutionState,
+    attempts: Vec<TrialAttempt>,
+    active: Option<ActiveAttempt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActiveAttempt {
     request: ExecutionRequest,
     attempt_number: u32,
@@ -578,6 +601,120 @@ impl TrialCoordinator {
             action,
             retry_reason,
         })
+    }
+
+    /// Serializes the coordinator's runtime state for snapshots: per-trial
+    /// status, attempts and active request, plus the schedule fields used to
+    /// check that a restore targets the same schedule. Trial definitions are
+    /// not included; they come from the schedule on restore.
+    pub fn export_state(&self) -> Result<Value, OrchestrationError> {
+        let state = CoordinatorState {
+            evaluation_ref: self.evaluation_ref.clone(),
+            plan_ref: self.plan_ref.clone(),
+            max_active_runs: self.max_active_runs,
+            retry_policy: self.retry_policy.clone(),
+            trials: self
+                .trials
+                .iter()
+                .map(|(id, runtime)| {
+                    (
+                        id.clone(),
+                        TrialState {
+                            state: runtime.state,
+                            attempts: runtime.attempts.clone(),
+                            active: runtime.active.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        serde_json::to_value(state).map_err(|error| {
+            OrchestrationError::InvalidSchedule(format!("could not export state: {error}"))
+        })
+    }
+
+    /// Rebuilds a coordinator from [`TrialCoordinator::export_state`] output
+    /// against `schedule`. The state must name the same evaluation, plan,
+    /// limits, retry policy and trials, and be internally consistent (an
+    /// active request exactly when a trial is in flight, matching attempt
+    /// numbers, unique identities, attempts within the policy limit).
+    pub fn restore_state(
+        schedule: EvaluationSchedule,
+        state: Value,
+    ) -> Result<Self, OrchestrationError> {
+        let bad = |what: &str| OrchestrationError::InvalidSchedule(format!("snapshot {what}"));
+        let mut coordinator = Self::new(schedule)?;
+        let state: CoordinatorState =
+            serde_json::from_value(state).map_err(|e| bad(&format!("is unreadable: {e}")))?;
+        if state.evaluation_ref != coordinator.evaluation_ref
+            || state.plan_ref != coordinator.plan_ref
+            || state.max_active_runs != coordinator.max_active_runs
+            || state.retry_policy != coordinator.retry_policy
+        {
+            return Err(bad("belongs to a different schedule"));
+        }
+        if state.trials.len() != coordinator.trials.len()
+            || state
+                .trials
+                .keys()
+                .any(|id| !coordinator.trials.contains_key(id))
+        {
+            return Err(bad("names different trials"));
+        }
+        let max_attempts = coordinator.retry_policy.max_attempts_per_trial as usize;
+        let mut active_runs = 0;
+        for (id, trial) in state.trials {
+            let in_flight = trial.state == TrialExecutionState::InFlight;
+            let last_reserved = trial
+                .attempts
+                .last()
+                .is_some_and(|a| a.status == AttemptStatus::Reserved);
+            let consistent = trial.attempts.len() <= max_attempts
+                && trial
+                    .attempts
+                    .iter()
+                    .enumerate()
+                    .all(|(i, a)| a.attempt_number as usize == i + 1)
+                && in_flight == trial.active.is_some()
+                && in_flight == last_reserved
+                && trial.active.as_ref().is_none_or(|active| {
+                    active.attempt_number as usize == trial.attempts.len()
+                        && trial
+                            .attempts
+                            .last()
+                            .is_some_and(|a| a.request_id == active.request.request_id)
+                });
+            if !consistent {
+                return Err(bad(&format!("is inconsistent for trial {id}")));
+            }
+            for attempt in &trial.attempts {
+                let fresh = coordinator
+                    .seen_run_ids
+                    .insert(attempt.run_ref.record_id.clone())
+                    & coordinator
+                        .seen_request_ids
+                        .insert(attempt.request_id.clone())
+                    & coordinator
+                        .seen_idempotency_keys
+                        .insert(attempt.idempotency_key.clone());
+                if !fresh {
+                    return Err(bad("repeats an attempt identity"));
+                }
+            }
+            active_runs += usize::from(in_flight);
+            let runtime = coordinator
+                .trials
+                .get_mut(&id)
+                .ok_or_else(|| bad("names different trials"))?;
+            runtime.state = trial.state;
+            runtime.attempts = trial.attempts;
+            runtime.active = trial.active;
+        }
+        if active_runs > coordinator.max_active_runs {
+            return Err(bad("exceeds max_active_runs"));
+        }
+        coordinator.active_runs = active_runs;
+        Ok(coordinator)
     }
 
     /// Cancel a trial that has not started an attempt or is waiting for a retry.
@@ -1041,5 +1178,50 @@ mod tests {
             .reserve_attempt("TRIAL-2", identity("RUN-2", "2"))
             .unwrap();
         assert!(coordinator.cancel_trial("TRIAL-2").is_err());
+    }
+
+    #[test]
+    fn exported_state_restores_exactly_and_only_for_its_schedule() {
+        let policy = RetryPolicy {
+            max_attempts_per_trial: 2,
+            retry_retryable_runner_errors: true,
+            ..RetryPolicy::default()
+        };
+        let mut original = coordinator(policy.clone(), 2);
+        original
+            .reserve_attempt("TRIAL-1", identity("RUN-1", "1"))
+            .unwrap();
+        original
+            .reserve_attempt("TRIAL-2", identity("RUN-2", "2"))
+            .unwrap();
+        original
+            .complete_attempt(
+                "TRIAL-2",
+                "REQ-2",
+                Ok(result("REQ-2", ExecutionDisposition::Finished, None)),
+            )
+            .unwrap();
+        let state = original.export_state().unwrap();
+
+        let same = schedule(vec![trial("TRIAL-1"), trial("TRIAL-2")], policy.clone(), 2);
+        let restored = TrialCoordinator::restore_state(same, state.clone()).unwrap();
+        for id in ["TRIAL-1", "TRIAL-2"] {
+            assert_eq!(
+                restored.snapshot(id).unwrap(),
+                original.snapshot(id).unwrap()
+            );
+        }
+        assert_eq!(restored.active_run_count(), 1);
+        assert_eq!(restored.export_state().unwrap(), state);
+
+        let other = schedule(vec![trial("TRIAL-1"), trial("TRIAL-2")], policy.clone(), 3);
+        assert!(TrialCoordinator::restore_state(other, state.clone()).is_err());
+        let fewer = schedule(vec![trial("TRIAL-1")], policy.clone(), 2);
+        assert!(TrialCoordinator::restore_state(fewer, state.clone()).is_err());
+
+        let mut broken = state;
+        broken["trials"]["TRIAL-1"]["active"] = serde_json::Value::Null;
+        let same = schedule(vec![trial("TRIAL-1"), trial("TRIAL-2")], policy, 2);
+        assert!(TrialCoordinator::restore_state(same, broken).is_err());
     }
 }

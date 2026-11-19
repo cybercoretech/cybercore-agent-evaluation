@@ -107,3 +107,7 @@ jobs:
         run: |
           cargo test --locked -p cybercore-evaluation-core --test container_podman -- --nocapture
           cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture podman_
+          # Allowlisted egress (ADR-0019): builds the static forwarder; the only
+          # destination is a TLS stub on loopback, so no traffic leaves the runner.
+          cargo test --locked -p cybercore-evaluation-core --test container_egress -- --nocapture
+          cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture egress_

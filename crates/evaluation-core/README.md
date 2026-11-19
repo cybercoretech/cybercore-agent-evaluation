@@ -9,6 +9,7 @@ Provider-independent Rust library for the CyberCore Agent Evaluation Workbench.
 - Provider-neutral asynchronous runner port, request/capability models, default-deny network and side-effect policies, and normalized result validation.
 - In-memory evaluation/trial coordinator with per-instance concurrency reservations, explicit retry policy, unique run/request/idempotency identities, and bounded attempt summaries.
 - Rootless Podman container runner (`ContainerRunner`, ADR-0015) with per-trial pinned images, no network, dropped capabilities, read-only root, tmpfs workspace/output and verified cgroup memory/CPU/process limits.
+- Allowlisted egress for that runner (`with_egress`, `EgressProxy`, ADR-0019): a host-side HTTPS `CONNECT` proxy behind a Unix socket, with exact host names, TLS SNI matching, refusal of private destinations, connection and byte caps, a per-run log, and granted credentials redacted from captured output and collected files.
 - Linux Bubblewrap local process runner with an initial-executable allowlist, isolated namespaces, bounded tmpfs workspace, read-only task inputs, bounded output capture, and explicit wall-time limits.
 
 ## Deliberate non-goals

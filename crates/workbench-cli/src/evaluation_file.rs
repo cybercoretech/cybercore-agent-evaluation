@@ -1,8 +1,9 @@
 //! The evaluation file `workbench run` reads.
 
 use cybercore_evaluation_core::{
-    ContainerRunner, ContainerRunnerConfig, EvaluationSchedule, LocalProcessRunner,
-    LocalProcessRunnerConfig, RecordReference, Runner, RunnerError,
+    ContainerEgressConfig, ContainerRunner, ContainerRunnerConfig, EvaluationSchedule,
+    LocalProcessRunner, LocalProcessRunnerConfig, NetworkPolicy, RecordReference, Runner,
+    RunnerError,
 };
 use cybercore_evaluation_judge::{Inspect, JudgeCriterion, ModelJudgeConfig, ModelJudgeVerifier};
 use cybercore_evaluation_store::{
@@ -73,7 +74,61 @@ pub enum RunnerSpec {
         limits: RunnerLimits,
         #[serde(default)]
         resources: ContainerResources,
+        /// Allowlisted network access for trials whose `network_policy` is an
+        /// allowlist (ADR-0019). Absent: every trial must deny all network.
+        #[serde(default)]
+        egress: Option<EgressSpec>,
     },
+}
+
+/// Host egress proxy settings for the Podman runner.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressSpec {
+    /// A statically linked `cybercore-egress-forwarder`; defaults to the one
+    /// next to the `workbench` binary.
+    #[serde(default)]
+    pub forwarder_path: Option<PathBuf>,
+    #[serde(default = "default_egress_ports")]
+    pub ports: BTreeSet<u16>,
+    #[serde(default = "default_egress_connections")]
+    pub max_connections: usize,
+    #[serde(default = "default_egress_bytes")]
+    pub max_bytes: u64,
+    /// Allow names resolving to loopback/private addresses. Testing only.
+    #[serde(default)]
+    pub allow_private_destinations: bool,
+    /// Container variable name → where its secret value comes from. Values
+    /// are never written in the file.
+    #[serde(default)]
+    pub credentials: BTreeMap<String, CredentialSource>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialSource {
+    /// Host environment variable read when the run starts.
+    pub from_env: String,
+}
+
+fn default_egress_ports() -> BTreeSet<u16> {
+    BTreeSet::from([443])
+}
+
+fn default_egress_connections() -> usize {
+    64
+}
+
+fn default_egress_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+fn trial_credentials(task_input: &Value) -> Vec<&str> {
+    task_input
+        .get("credentials")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
 }
 
 /// Per-container cgroup limits.
@@ -380,6 +435,54 @@ impl EvaluationFile {
                 }
             }
         }
+        let egress = match &self.runner {
+            RunnerSpec::Podman { egress, .. } => egress.as_ref(),
+            RunnerSpec::LocalBubblewrap { .. } => None,
+        };
+        if let Some(egress) = egress {
+            if egress.ports.is_empty() || egress.ports.contains(&0) {
+                return Err("runner.egress.ports must list at least one non-zero port".into());
+            }
+            for (name, source) in &egress.credentials {
+                if source.from_env.is_empty() || source.from_env.contains(['=', '\0']) {
+                    return Err(format!(
+                        "runner.egress.credentials.{name}.from_env must name an environment variable"
+                    ));
+                }
+            }
+        }
+        for trial in &self.schedule.trials {
+            let id = &trial.trial_ref.record_id;
+            let allowlisted = match &trial.network_policy {
+                NetworkPolicy::DenyAll => false,
+                NetworkPolicy::Allowlist { hosts } => {
+                    if egress.is_none() {
+                        return Err(format!(
+                            "schedule.trials[{id}].network_policy is an allowlist, which needs runner.type \"podman\" with runner.egress"
+                        ));
+                    }
+                    if hosts.is_empty() {
+                        return Err(format!(
+                            "schedule.trials[{id}].network_policy.hosts must list at least one host"
+                        ));
+                    }
+                    true
+                }
+            };
+            let credentials = trial_credentials(&trial.task_input);
+            if !credentials.is_empty() && !allowlisted {
+                return Err(format!(
+                    "schedule.trials[{id}].task_input.credentials need an allowlist network_policy"
+                ));
+            }
+            for name in credentials {
+                if !egress.is_some_and(|e| e.credentials.contains_key(name)) {
+                    return Err(format!(
+                        "schedule.trials[{id}].task_input.credentials lists {name:?}, which is not in runner.egress.credentials"
+                    ));
+                }
+            }
+        }
         let task_ids: BTreeSet<&str> = self
             .schedule
             .trials
@@ -643,35 +746,80 @@ impl EvaluationFile {
                 allowed_environment_keys,
                 limits,
                 resources,
-            } => Ok(Box::new(ContainerRunner::new(ContainerRunnerConfig {
-                runner_id: runner_id.clone(),
-                runner_version: env!("CARGO_PKG_VERSION").into(),
-                podman_path: podman_path.clone(),
-                temporary_root,
-                images: images.clone(),
-                allowed_executables: allowed_executables.clone(),
-                allowed_environment_keys: allowed_environment_keys.clone(),
-                max_wall_time_ms: limits.max_wall_time_ms,
-                max_output_bytes: limits.max_output_bytes,
-                memory_bytes: resources.memory_bytes,
-                cpu_millis: resources.cpu_millis,
-                pids_limit: resources.pids_limit,
-                workspace_bytes: limits.max_workspace_bytes,
-                tmp_bytes: limits.max_tmp_bytes,
-                max_input_file_bytes: limits.max_input_file_bytes,
-                max_input_files: limits.max_input_files,
-                max_arguments: limits.max_arguments,
-                max_argument_bytes: limits.max_argument_bytes,
-                artifact_root,
-                max_artifact_bytes: limits.max_artifact_bytes,
-                max_output_files: limits.max_output_files,
-            })?)),
+                egress,
+            } => {
+                let runner = ContainerRunner::new(ContainerRunnerConfig {
+                    runner_id: runner_id.clone(),
+                    runner_version: env!("CARGO_PKG_VERSION").into(),
+                    podman_path: podman_path.clone(),
+                    temporary_root,
+                    images: images.clone(),
+                    allowed_executables: allowed_executables.clone(),
+                    allowed_environment_keys: allowed_environment_keys.clone(),
+                    max_wall_time_ms: limits.max_wall_time_ms,
+                    max_output_bytes: limits.max_output_bytes,
+                    memory_bytes: resources.memory_bytes,
+                    cpu_millis: resources.cpu_millis,
+                    pids_limit: resources.pids_limit,
+                    workspace_bytes: limits.max_workspace_bytes,
+                    tmp_bytes: limits.max_tmp_bytes,
+                    max_input_file_bytes: limits.max_input_file_bytes,
+                    max_input_files: limits.max_input_files,
+                    max_arguments: limits.max_arguments,
+                    max_argument_bytes: limits.max_argument_bytes,
+                    artifact_root,
+                    max_artifact_bytes: limits.max_artifact_bytes,
+                    max_output_files: limits.max_output_files,
+                })?;
+                match egress {
+                    None => Ok(Box::new(runner)),
+                    Some(egress) => Ok(Box::new(runner.with_egress(egress_config(egress)?)?)),
+                }
+            }
         }
     }
 
     pub fn verifier(&self) -> Box<dyn Verifier> {
         build_verifier(&self.verifier)
     }
+}
+
+fn config_error(message: impl Into<String>) -> RunnerError {
+    RunnerError {
+        kind: cybercore_evaluation_core::RunnerErrorKind::InvalidRequest,
+        retryable: false,
+        message: message.into(),
+    }
+}
+
+/// Resolves the forwarder path and reads granted secrets from the host
+/// environment. A missing variable is an error, never an empty secret.
+fn egress_config(spec: &EgressSpec) -> Result<ContainerEgressConfig, RunnerError> {
+    let forwarder_path = match &spec.forwarder_path {
+        Some(path) => path.clone(),
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("cybercore-egress-forwarder")))
+            .ok_or_else(|| config_error("cannot locate the workbench binary to find cybercore-egress-forwarder; set runner.egress.forwarder_path"))?,
+    };
+    let mut credentials = BTreeMap::new();
+    for (name, source) in &spec.credentials {
+        let value = std::env::var(&source.from_env).map_err(|_| {
+            config_error(format!(
+                "runner.egress.credentials.{name} reads host environment variable {}, which is not set",
+                source.from_env
+            ))
+        })?;
+        credentials.insert(name.clone(), value);
+    }
+    Ok(ContainerEgressConfig {
+        forwarder_path,
+        ports: spec.ports.clone(),
+        max_connections: spec.max_connections,
+        max_bytes: spec.max_bytes,
+        allow_private_destinations: spec.allow_private_destinations,
+        credentials,
+    })
 }
 
 fn build_verifier(spec: &VerifierSpec) -> Box<dyn Verifier> {

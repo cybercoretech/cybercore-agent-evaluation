@@ -5,14 +5,19 @@
 
 pub mod container;
 pub mod domain_invariants;
+pub mod egress;
 pub mod local_process;
 pub mod orchestration;
 pub mod run_state;
 pub mod runner;
 pub mod workspace_outputs;
 
-pub use container::{container_name, ContainerRunner, ContainerRunnerConfig, ContainerTaskInput};
+pub use container::{
+    container_name, ContainerEgressConfig, ContainerRunner, ContainerRunnerConfig,
+    ContainerTaskInput,
+};
 pub use domain_invariants::{validate_domain_fixture, validate_domain_fixtures};
+pub use egress::{EgressEvent, EgressLog, EgressPolicy, EgressProxy};
 pub use local_process::{
     LocalProcessInputFile, LocalProcessRunner, LocalProcessRunnerConfig, LocalProcessTaskInput,
 };

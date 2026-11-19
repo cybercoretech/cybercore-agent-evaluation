@@ -842,3 +842,222 @@ fn composite_verdicts_flow_through_a_real_run() {
     // at out/report.txt to read (unavailable), so the state is mixed.
     assert_eq!(run(1), ("mixed".into(), "fail".into()));
 }
+
+#[test]
+fn egress_specs_are_validated() {
+    let dir = TempDir::new("egress-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "allowlist without egress",
+            Box::new(|v| {
+                v["runner"].as_object_mut().unwrap().remove("egress");
+            }),
+            "schedule.trials[TRIAL-REACH-ALLOWED-HOST].network_policy is an allowlist, which needs runner.type \"podman\" with runner.egress",
+        ),
+        (
+            "credentials without allowlist",
+            Box::new(|v| {
+                v["schedule"]["trials"][0]["network_policy"] = serde_json::json!({"mode": "deny_all"});
+            }),
+            "schedule.trials[TRIAL-REACH-ALLOWED-HOST].task_input.credentials need an allowlist network_policy",
+        ),
+        (
+            "ungranted credential",
+            Box::new(|v| {
+                v["schedule"]["trials"][0]["task_input"]["credentials"] = serde_json::json!(["OTHER_KEY"]);
+            }),
+            "lists \"OTHER_KEY\", which is not in runner.egress.credentials",
+        ),
+        (
+            "secret value in the file",
+            Box::new(|v| {
+                v["runner"]["egress"]["credentials"]["ANTHROPIC_API_KEY"] = serde_json::json!({"value": "sk-..."});
+            }),
+            "unknown field `value`",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("container-egress.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{}.json", name.replace(' ', "-")), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let message = stderr(&output);
+        assert!(
+            message.contains(expected),
+            "{name}: expected {expected:?} in {message}"
+        );
+    }
+}
+
+/// Builds the egress forwarder statically, once per test binary.
+fn static_forwarder() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static-forwarder");
+        let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args([
+                "build",
+                "--quiet",
+                "--release",
+                "--locked",
+                "-p",
+                "cybercore-egress-forwarder",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+            ])
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("RUSTFLAGS", "-C target-feature=+crt-static")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "building the static forwarder failed");
+        target_dir.join("x86_64-unknown-linux-gnu/release/cybercore-egress-forwarder")
+    })
+    .clone()
+}
+
+/// A TLS stand-in on the host loopback: reads one TLS record, answers PONG.
+fn tls_stub() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for mut stream in listener.incoming().flatten() {
+            let mut header = [0_u8; 5];
+            if stream.read_exact(&mut header).is_ok() {
+                let mut body = vec![0_u8; usize::from(u16::from_be_bytes([header[3], header[4]]))];
+                if stream.read_exact(&mut body).is_ok() {
+                    let _ = stream.write_all(b"PONG\n");
+                }
+            }
+        }
+    });
+    port
+}
+
+fn hello_escapes(sni: &str) -> String {
+    let name = sni.as_bytes();
+    let mut ext = vec![0, 0];
+    ext.extend(((name.len() + 5) as u16).to_be_bytes());
+    ext.extend(((name.len() + 3) as u16).to_be_bytes());
+    ext.push(0);
+    ext.extend((name.len() as u16).to_be_bytes());
+    ext.extend(name);
+    let mut body = vec![3, 3];
+    body.extend([7_u8; 32]);
+    body.extend([0, 0, 2, 0x13, 1, 1, 0]);
+    body.extend((ext.len() as u16).to_be_bytes());
+    body.extend(ext);
+    let mut handshake = vec![1];
+    handshake.extend(&(body.len() as u32).to_be_bytes()[1..]);
+    handshake.extend(body);
+    let mut record = vec![0x16, 3, 1];
+    record.extend((handshake.len() as u16).to_be_bytes());
+    record.extend(handshake);
+    record.iter().map(|b| format!("\\x{b:02x}")).collect()
+}
+
+/// The egress example, pointed at a local TLS stub instead of the internet,
+/// run for real through Podman; the granted token must never reach the store.
+#[test]
+fn egress_example_runs_against_a_local_stub_without_leaking_the_token() {
+    const TOKEN: &str = "wb-egress-test-token-0123456789";
+    let dir = TempDir::new("egress-run");
+    let port = tls_stub();
+    let mut value = load_example("container-egress.json");
+    let trial = &mut value["schedule"]["trials"][0];
+    trial["network_policy"]["hosts"] = serde_json::json!(["localhost"]);
+    let script = trial["task_input"]["args"][1]
+        .as_str()
+        .unwrap()
+        .replace("api.anthropic.com:443", &format!("localhost:{port}"))
+        + "\necho \"leak:$ANTHROPIC_API_KEY\"";
+    trial["task_input"]["args"][1] = script.into();
+    trial["task_input"]["environment"]["HELLO"] = hello_escapes("localhost").into();
+    let egress = &mut value["runner"]["egress"];
+    egress["ports"] = serde_json::json!([port]);
+    egress["allow_private_destinations"] = true.into();
+    egress["forwarder_path"] = static_forwarder().to_str().unwrap().into();
+    egress["credentials"]["ANTHROPIC_API_KEY"]["from_env"] = "WB_EGRESS_TEST_TOKEN".into();
+    let file = dir.file("eval.json", &value);
+    let store = dir.0.join("store");
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ])
+        .env_remove("WORKBENCH_STORE")
+        .env("WB_EGRESS_TEST_TOKEN", TOKEN)
+        .output()
+        .unwrap();
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_PODMAN").is_none(),
+            "WORKBENCH_REQUIRE_PODMAN is set but the container runner is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: container runner unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status = workbench(
+        &["status", "EVAL-CONTAINER-EGRESS", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let report: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let run = &report["trials"][0]["runs"][0];
+    assert_eq!(run["verification_state"], "verified_pass", "{report:#}");
+    assert_eq!(run["run_outcome"], "pass");
+
+    // Missing host variable: a clear error, never an empty secret.
+    let missing = Command::new(BIN)
+        .args([
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            dir.0.join("store2").to_str().unwrap(),
+        ])
+        .env_remove("WORKBENCH_STORE")
+        .env_remove("WB_EGRESS_TEST_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        stderr(&missing)
+            .contains("reads host environment variable WB_EGRESS_TEST_TOKEN, which is not set"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let mut stack = vec![store];
+    while let Some(path) = stack.pop() {
+        for entry in fs::read_dir(&path).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                assert!(
+                    !bytes.windows(TOKEN.len()).any(|w| w == TOKEN.as_bytes()),
+                    "token leaked into {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}

@@ -49,6 +49,22 @@ Unknown fields are rejected, and every error names the file and the field.
 
 `runner.type: "podman"` runs every attempt in its own rootless Podman container ([ADR-0015](../../docs/decisions/0015-podman-container-runner.md)): no network, all capabilities dropped, a read-only image, size-limited tmpfs mounts, and cgroup memory, CPU and process limits. The runner checks that the limits really apply and refuses to run otherwise. Images must already be pulled, because the runner runs them by image ID and never pulls. A task stopped by the memory limit is recorded as `errored` / `not_scored`. See `evaluations/container-report.json`.
 
+**Allowlisted network and credentials ([ADR-0019](../../docs/decisions/0019-egress-allowlist.md)).** A Podman runner with an `egress` block lets a trial whose `network_policy` is `{"mode": "allowlist", "hosts": [...]}` reach exactly those hosts:
+
+```json
+"egress": {
+  "ports": [443],
+  "max_connections": 64,
+  "max_bytes": 67108864,
+  "credentials": {"ANTHROPIC_API_KEY": {"from_env": "ANTHROPIC_API_KEY"}}
+}
+```
+
+- **How it works:** the container still has no network. Its only way out is a host proxy, reached through a mounted Unix socket. The proxy accepts only HTTPS `CONNECT` to an allowlisted name on an allowed port, checks that the TLS server name matches, refuses IP addresses and private destinations, and logs every attempt in the run's output (`network.egress`). `HTTPS_PROXY` is set inside the container, so normal HTTP clients just work.
+- **Credentials:** a trial lists the ones it needs in `task_input.credentials`. Their values are read from the host environment when the run starts and never appear in the file or on a command line. Granted values are replaced with `[REDACTED:NAME]` in stdout and stderr, and an output file containing one is rejected.
+- **The forwarder:** egress needs a statically linked forwarder, by default next to the `workbench` binary. Build it with `RUSTFLAGS='-C target-feature=+crt-static' cargo build --release -p cybercore-egress-forwarder --target x86_64-unknown-linux-gnu`, or set `egress.forwarder_path`.
+- **Example:** `evaluations/container-egress.json` reaches `api.anthropic.com` (a TLS handshake only, never an API request) and shows `example.com` refused and direct connections blocked.
+
 ## 📁 Checking files the agent writes
 
 Set `"collect_outputs": true` in a trial's `task_input` and give it a positive `budget.max_artifact_bytes`. The sandbox then gets a writable `/workspace/output`; regular files left there after a clean exit are collected, digested and handed to `checks`. Symlinks, FIFOs and devices are rejected unread, and runs that time out have no collected files. `evaluations/report-files.json` is a complete example: one trial writes the report correctly, the other writes it to the wrong path and leaves a scratch file. See [ADR-0014](../../docs/decisions/0014-workspace-output-files.md).

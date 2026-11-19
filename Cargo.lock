@@ -321,6 +321,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybercore-egress-forwarder"
+version = "0.1.0"
+
+[[package]]
 name = "cybercore-evaluation-core"
 version = "0.3.0"
 dependencies = [

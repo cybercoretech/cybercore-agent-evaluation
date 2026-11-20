@@ -99,6 +99,8 @@ jobs:
           podman --version
           podman info --format 'cgroups={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}} rootless={{.Host.Security.Rootless}}'
           podman pull docker.io/library/ubuntu:22.04
+      - name: Build the reference agent image (ADR-0025)
+        run: podman build -t localhost/cybercore-reference-agent:0.1 examples/reference-agent
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Container runner and workbench CLI against real Podman (skips are failures here)
@@ -111,3 +113,6 @@ jobs:
           # destination is a TLS stub on loopback, so no traffic leaves the runner.
           cargo test --locked -p cybercore-evaluation-core --test container_egress -- --nocapture
           cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture egress_
+          # The reference agent (ADR-0025) against the fake Messages API on
+          # loopback: a real SDK agent, real egress, no real API calls.
+          WORKBENCH_REQUIRE_REFERENCE_AGENT=1 cargo test --locked -p cybercore-workbench-cli --test cli -- --nocapture reference_agent_

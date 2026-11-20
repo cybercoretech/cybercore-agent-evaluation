@@ -1,0 +1,10 @@
+# The reference agent's image (ADR-0025). Build it once; the workbench runs
+# images by ID and never pulls or builds:
+#
+#   podman build -t localhost/cybercore-reference-agent:0.1 examples/reference-agent
+#
+# The SDK is pinned for reproducible runs; record the image digest the
+# workbench reports with your results.
+FROM docker.io/library/python:3.12-slim
+RUN pip install --no-cache-dir anthropic==2.5.0
+COPY agent.py /opt/agent/agent.py

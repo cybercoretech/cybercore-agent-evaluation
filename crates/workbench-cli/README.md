@@ -72,6 +72,7 @@ Writing every trial out in full gets long. A **task suite** lists the tasks once
 - **Budgets:** each value comes from the task, then the suite's `defaults.budget`, then the runner's limits.
 - **Optional fields:** `project_ref`, `store_output_evidence`, `retry_policy`, `pricing`, `decision_question` and `created_at` (for the generated task records).
 - **Running:** every agent's evaluation is checked before the first one runs, and they then run in the listed order. Running the suite again resumes them.
+- **Real agents:** `evaluations/reference-agent-suite.json` runs the [reference agent](../../examples/reference-agent/README.md), a small Claude SDK agent, through allowlisted egress. Its test runs it against a fake API for free.
 - **`expand`** writes ordinary evaluation files. It never overwrites a file with different content. The IDs are fixed, so change `suite_id` when you change the tasks.
 
 ## 📊 Summaries and comparisons

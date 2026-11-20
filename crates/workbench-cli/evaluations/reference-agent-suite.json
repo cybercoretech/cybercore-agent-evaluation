@@ -1,0 +1,243 @@
+{
+  "format": "cybercore-workbench-suite/v0",
+  "suite_id": "REFAGENT",
+  "repeats": 2,
+  "runner": {
+    "type": "podman",
+    "images": {
+      "agent": "localhost/cybercore-reference-agent:0.1"
+    },
+    "allowed_executables": {
+      "python": "/usr/local/bin/python3"
+    },
+    "limits": {
+      "max_wall_time_ms": 180000,
+      "max_output_bytes": 16384,
+      "max_workspace_bytes": 16777216,
+      "max_tmp_bytes": 16777216,
+      "max_artifact_bytes": 65536,
+      "max_output_files": 8
+    },
+    "resources": {
+      "memory_bytes": 268435456,
+      "cpu_millis": 1000,
+      "pids_limit": 64
+    },
+    "egress": {
+      "ports": [
+        443
+      ],
+      "max_connections": 64,
+      "max_bytes": 8388608,
+      "credentials": {
+        "ANTHROPIC_API_KEY": {
+          "from_env": "ANTHROPIC_API_KEY"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "collect_outputs": true,
+    "max_active_runs": 2
+  },
+  "agents": [
+    {
+      "agent_id": "HAIKU",
+      "image_id": "agent",
+      "executable_id": "python",
+      "args": [
+        "/opt/agent/agent.py"
+      ],
+      "environment": {
+        "AGENT_MODEL": "claude-haiku-5-5"
+      },
+      "network": {
+        "hosts": [
+          "api.anthropic.com"
+        ]
+      },
+      "credentials": [
+        "ANTHROPIC_API_KEY"
+      ]
+    },
+    {
+      "agent_id": "OPUS",
+      "image_id": "agent",
+      "executable_id": "python",
+      "args": [
+        "/opt/agent/agent.py"
+      ],
+      "environment": {
+        "AGENT_MODEL": "claude-opus-5-5"
+      },
+      "network": {
+        "hosts": [
+          "api.anthropic.com"
+        ]
+      },
+      "credentials": [
+        "ANTHROPIC_API_KEY"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "ONES",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "1\n1\n1\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "3\n"
+        }
+      ]
+    },
+    {
+      "task_id": "SMALL",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "1\n2\n3\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "6\n"
+        }
+      ]
+    },
+    {
+      "task_id": "TENS",
+      "family": "arithmetic",
+      "difficulty": "medium",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "10\n20\n30\n40\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "100\n"
+        }
+      ]
+    },
+    {
+      "task_id": "MIXED",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "5\n7\n9\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "21\n"
+        }
+      ]
+    },
+    {
+      "task_id": "BIG",
+      "family": "arithmetic",
+      "difficulty": "low",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "100\n250\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "350\n"
+        }
+      ]
+    },
+    {
+      "task_id": "LONG",
+      "family": "arithmetic-long",
+      "difficulty": "medium",
+      "objective": "Write the sum of the numbers in numbers.txt to out/report.txt.",
+      "files": [
+        {
+          "path": "numbers.txt",
+          "content": "2\n4\n6\n8\n10\n"
+        }
+      ],
+      "environment": {
+        "TASK_PROMPT": "Sum the numbers in the .txt file in /workspace/input (one per line) and write the total, followed by a newline, to /workspace/output/out/report.txt."
+      },
+      "checks": [
+        {
+          "criterion_id": "total-written",
+          "kind": "file_equals",
+          "path": "out/report.txt",
+          "expected": "30\n"
+        }
+      ]
+    }
+  ],
+  "pricing": {
+    "currency": "USD",
+    "models": {
+      "claude-haiku-5-5": {
+        "input_per_million_tokens": 0.1,
+        "output_per_million_tokens": 0.5
+      },
+      "claude-opus-5-5": {
+        "input_per_million_tokens": 4.0,
+        "output_per_million_tokens": 20.0
+      }
+    }
+  },
+  "compare": [
+    {
+      "baseline": "HAIKU",
+      "treatment": "OPUS",
+      "minimum_matched_tasks": 5
+    }
+  ]
+}

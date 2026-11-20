@@ -1781,3 +1781,176 @@ fn suite_specs_are_validated() {
         );
     }
 }
+
+const REFERENCE_IMAGE: &str = "localhost/cybercore-reference-agent:0.1";
+
+/// The fake Messages API (examples/reference-agent/fake_api.py) on loopback,
+/// with a throwaway certificate for `localhost`. Stopped on drop.
+struct FakeApi {
+    child: std::process::Child,
+    port: u16,
+    cert: String,
+}
+
+impl FakeApi {
+    fn start(dir: &Path, key: &str) -> Option<Self> {
+        let (cert, private) = (dir.join("fake-cert.pem"), dir.join("fake-key.pem"));
+        let made = Command::new("openssl")
+            .args([
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            ])
+            .args([
+                "-subj",
+                "/CN=localhost",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+            ])
+            .arg("-keyout")
+            .arg(&private)
+            .arg("-out")
+            .arg(&cert)
+            .output()
+            .ok()?;
+        if !made.status.success() {
+            return None;
+        }
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/reference-agent/fake_api.py");
+        let mut child = Command::new("python3")
+            .arg(script)
+            .arg("--cert")
+            .arg(&cert)
+            .arg("--key")
+            .arg(&private)
+            .args(["--expect-key", key])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let mut line = String::new();
+        use std::io::BufRead;
+        std::io::BufReader::new(child.stdout.take()?)
+            .read_line(&mut line)
+            .ok()?;
+        let port = line.trim().strip_prefix("listening on ")?.parse().ok()?;
+        Some(Self {
+            child,
+            port,
+            cert: fs::read_to_string(&cert).ok()?,
+        })
+    }
+}
+
+impl Drop for FakeApi {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn reference_agent_runs_through_egress_against_the_fake_api() {
+    const KEY: &str = "wb-reference-agent-test-key-0123456789";
+    let required = std::env::var_os("WORKBENCH_REQUIRE_REFERENCE_AGENT").is_some();
+    let image = Command::new("podman")
+        .args(["image", "exists", REFERENCE_IMAGE])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !image {
+        assert!(
+            !required,
+            "WORKBENCH_REQUIRE_REFERENCE_AGENT is set but {REFERENCE_IMAGE} is not built"
+        );
+        eprintln!("SKIPPED: build {REFERENCE_IMAGE} first (see examples/reference-agent)");
+        return;
+    }
+    let dir = TempDir::new("reference-agent");
+    let fake =
+        FakeApi::start(&dir.0, KEY).expect("openssl and python3 are needed for the fake API");
+
+    let mut suite = load_example("reference-agent-suite.json");
+    let egress = &mut suite["runner"]["egress"];
+    egress["ports"] = serde_json::json!([fake.port]);
+    egress["allow_private_destinations"] = true.into();
+    egress["forwarder_path"] = static_forwarder().to_str().unwrap().into();
+    egress["credentials"]["ANTHROPIC_API_KEY"]["from_env"] = "WB_REFERENCE_TEST_KEY".into();
+    for agent in suite["agents"].as_array_mut().unwrap() {
+        agent["network"]["hosts"] = serde_json::json!(["localhost"]);
+        agent["environment"]["ANTHROPIC_BASE_URL"] =
+            format!("https://localhost:{}", fake.port).into();
+        agent["environment"]["AGENT_CA_FILE"] = "/workspace/input/fake-ca.pem".into();
+    }
+    for task in suite["tasks"].as_array_mut().unwrap() {
+        task["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"path": "fake-ca.pem", "content": fake.cert}));
+    }
+    let file = dir.file("suite.json", &suite);
+    let store = dir.0.join("store");
+    let output = Command::new(BIN)
+        .args([
+            "run",
+            file.to_str().unwrap(),
+            "--store",
+            store.to_str().unwrap(),
+        ])
+        .env_remove("WORKBENCH_STORE")
+        .env("WB_REFERENCE_TEST_KEY", KEY)
+        .output()
+        .unwrap();
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_PODMAN").is_none() && !required,
+            "the container runner is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: container runner unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let compare = workbench(
+        &["compare", "REFAGENT-HAIKU", "REFAGENT-OPUS", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(compare.status.success(), "{}", stderr(&compare));
+    let out: Value = serde_json::from_str(&stdout(&compare)).unwrap();
+    // The fake's "haiku" writes the line count, which equals the total only
+    // for ONES (three 1s): 1 task × 2 repeats.
+    assert_eq!(out["treatment"]["passes"], 12, "{out:#}");
+    assert_eq!(out["baseline"]["passes"], 2, "{out:#}");
+    assert_eq!(out["comparison"]["inferential_status"], "confirmatory");
+    // Four API calls per trial at fixed usage: 1 100 tokens a call for haiku,
+    // 2 200 for opus; costs from the suite's declared prices.
+    let tokens = &out["speed_and_cost"][1];
+    assert_eq!(tokens["difference"].as_f64(), Some(4400.0), "{tokens}");
+    let summary = workbench(
+        &["summary", "REFAGENT-OPUS", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let opus: Value = serde_json::from_str(&stdout(&summary)).unwrap();
+    assert_eq!(opus["speed_and_cost"][1]["estimate"].as_f64(), Some(8800.0));
+    let cost = opus["speed_and_cost"][2]["estimate"].as_f64().unwrap();
+    assert!((cost - 48_000.0).abs() < 1e-6, "{cost}"); // 8000 × $4 + 800 × $20 per million
+
+    // The granted key never reaches the store.
+    let mut stack = vec![store];
+    while let Some(path) = stack.pop() {
+        for entry in fs::read_dir(&path).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                assert!(
+                    !bytes.windows(KEY.len()).any(|w| w == KEY.as_bytes()),
+                    "key leaked into {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}

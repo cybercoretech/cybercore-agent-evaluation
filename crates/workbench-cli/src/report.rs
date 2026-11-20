@@ -6,6 +6,7 @@
 //! rendered twice, so both formats always say the same thing.
 
 use crate::summary::{amount, open, summarise};
+use cybercore_evaluation_store::analysis::FailureAnalysis;
 use cybercore_evaluation_store::analysis::{
     compare, compare_resources, record_comparison, record_resource_comparisons, resource_summaries,
     Comparison, EvaluationOutcomes, PassRate, ResourceComparison, ResourceMetric, ResourceSummary,
@@ -14,6 +15,9 @@ use cybercore_evaluation_store::analysis::{
 use cybercore_evaluation_store::LocalStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+/// Failure groups shown per evaluation; `workbench failures` lists all.
+const MAX_FAILURE_GROUPS: usize = 5;
 
 /// One block of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +37,8 @@ struct Evaluated {
     rate: PassRate,
     records: SummaryRecords,
     resources: Vec<ResourceSummary>,
+    failures: FailureAnalysis,
+    failure_ids: Vec<String>,
 }
 
 struct Compared {
@@ -84,12 +90,15 @@ fn build(store: &LocalStore, ids: &[String], generated: &str) -> Result<Vec<Bloc
     for id in ids {
         let (outcomes, rate, records) = summarise(store, id)?;
         let resources = resource_summaries(&outcomes);
+        let (_, failures, failure_ids) = crate::failures::analyse(store, id)?;
         evaluated.push(Evaluated {
             id: id.clone(),
             outcomes,
             rate,
             records,
             resources,
+            failures,
+            failure_ids,
         });
     }
     let mut compared = Vec::new();
@@ -387,6 +396,31 @@ fn document(
         "Each cell is passes out of trials with an outcome; ✗ marks a task with a failure.".into(),
     ));
 
+    blocks.push(Block::Heading(2, "Failures".into()));
+    for e in evaluated {
+        blocks.push(Block::Heading(3, e.id.clone()));
+        if e.failures.groups.is_empty() {
+            blocks.push(Block::Paragraph(
+                "No failures in the latest attempts.".into(),
+            ));
+            continue;
+        }
+        let shown = e.failures.groups.len().min(MAX_FAILURE_GROUPS);
+        blocks.push(Block::List(
+            e.failures.groups[..shown]
+                .iter()
+                .map(|g| crate::failures::group_lines(g, &e.failures).join("; "))
+                .collect(),
+        ));
+        if e.failures.groups.len() > shown {
+            blocks.push(Block::Paragraph(format!(
+                "{} more failure group(s): run `workbench failures {}` for all of them.",
+                e.failures.groups.len() - shown,
+                e.id
+            )));
+        }
+    }
+
     let mut seen = BTreeSet::new();
     let caveats: Vec<String> = evaluated
         .iter()
@@ -417,6 +451,7 @@ fn document(
             "Metric result",
             "Analysis result",
             "Frozen plan",
+            "Failure records",
         ]
         .map(String::from)
         .to_vec(),
@@ -435,6 +470,7 @@ fn document(
                             format!("{} (sha256 {}…)", e.outcomes.plan_id, &d[..12.min(d.len())])
                         })
                         .unwrap_or_else(|| "none".into()),
+                    e.failure_ids.len().to_string(),
                 ]
             })
             .collect(),

@@ -59,6 +59,7 @@ fn pass_rate_records_keep_the_count_invariants() {
                 attempts: u64::from(*outcome != TrialOutcome::NotRun),
                 wall_time_ms: Some(100),
                 usage: ReportedUsage::Absent,
+                latest_run_id: None,
             })
             .collect(),
         plan_digest: "c".repeat(64),

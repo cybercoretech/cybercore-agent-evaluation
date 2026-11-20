@@ -401,6 +401,22 @@ fn document(
         "Each cell is passes out of trials with an outcome; ✗ marks a task with a failure.".into(),
     ));
 
+    blocks.push(Block::Heading(2, "Reliability".into()));
+    blocks.push(Block::List(
+        evaluated
+            .iter()
+            .map(|e| {
+                let r = cybercore_evaluation_store::analysis::reliability(&e.outcomes);
+                let text = crate::summary::reliability_text(&r, |id| {
+                    labels
+                        .get(id)
+                        .map_or_else(|| id.to_string(), |(key, _)| key.clone())
+                });
+                format!("{}: {text}.", e.id)
+            })
+            .collect(),
+    ));
+
     blocks.push(Block::Heading(2, "Failures".into()));
     for e in evaluated {
         blocks.push(Block::Heading(3, e.id.clone()));
@@ -477,15 +493,19 @@ fn document(
                 .limitations
                 .iter()
                 .chain(e.resources.iter().flat_map(|s| &s.limitations))
+                .cloned()
+                .chain(cybercore_evaluation_store::analysis::reliability(&e.outcomes).limitations)
+                .collect::<Vec<_>>()
         })
         .chain(compared.iter().flat_map(|c| {
             c.comparison
                 .limitations
                 .iter()
                 .chain(c.resources.iter().flat_map(|r| &r.limitations))
+                .cloned()
+                .collect::<Vec<_>>()
         }))
-        .filter(|note| seen.insert(note.as_str()))
-        .cloned()
+        .filter(|note| seen.insert(note.clone()))
         .collect();
     if !caveats.is_empty() {
         blocks.push(Block::Heading(2, "Caveats".into()));

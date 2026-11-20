@@ -2386,3 +2386,120 @@ fn readiness_specs_are_validated() {
         );
     }
 }
+
+/// Twelve tasks run twice each: tasks 0–7 pass both runs, 8–9 pass one run
+/// (flaky), 10–11 fail both.
+fn repeated_evaluation(id: &str) -> Value {
+    let mut value = twelve_task_evaluation(id, 12);
+    let template = value["schedule"]["trials"][0].clone();
+    let mut trials = Vec::new();
+    let mut expected = serde_json::Map::new();
+    for task in 0..12 {
+        for run in 0..2 {
+            let mut trial = template.clone();
+            let trial_id = format!("TRIAL-{task}-R{run}");
+            trial["trial_ref"]["record_id"] = trial_id.clone().into();
+            trial["task_revision_ref"]["record_id"] = format!("TASK-{task}").into();
+            let right = task < 8 || (task < 10 && run == 0);
+            trial["task_input"]["files"][0]["content"] = if right {
+                format!("answer {task}\n")
+            } else {
+                "wrong\n".into()
+            }
+            .into();
+            trials.push(trial);
+            expected.insert(trial_id, format!("answer {task}\n").into());
+        }
+    }
+    value["schedule"]["trials"] = trials.into();
+    value["verifier"] = serde_json::json!({"type": "stdout_equals", "expected": expected});
+    value
+}
+
+#[test]
+fn reliability_counts_tasks_across_repeats() {
+    let dir = TempDir::new("reliability");
+    let store = dir.0.join("store");
+    let mut value = repeated_evaluation("EVAL-REPEATS");
+    value["readiness"] = serde_json::json!({
+        "workload": "echo answers",
+        "gates": [
+            {"gate_id": "consistent", "metric": "all_runs_pass_rate", "at_least": 0.6},
+            {"gate_id": "consistent-bound", "metric": "all_runs_pass_rate_lower_bound", "at_least": 0.5, "mandatory": false}
+        ]
+    });
+    let file = dir.file("repeats.json", &value);
+    let output = workbench(
+        &["run", file.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary = workbench(
+        &["summary", "EVAL-REPEATS", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let out: Value = serde_json::from_str(&stdout(&summary)).unwrap();
+    let r = &out["reliability"];
+    assert_eq!(r["status"], "computed", "{r:#}");
+    assert_eq!(r["repeated_tasks"], 12);
+    assert_eq!(
+        (
+            r["all_runs_pass_tasks"].as_u64(),
+            r["all_runs_fail_tasks"].as_u64()
+        ),
+        (Some(8), Some(2))
+    );
+    assert!((r["all_runs_pass_rate"].as_f64().unwrap() - 8.0 / 12.0).abs() < 1e-9);
+    assert!((r["any_run_pass_rate"].as_f64().unwrap() - 10.0 / 12.0).abs() < 1e-9);
+    assert_eq!(
+        r["flaky_tasks"],
+        serde_json::json!([{"task": "TASK-8", "passes": 1, "trials": 2}, {"task": "TASK-9", "passes": 1, "trials": 2}])
+    );
+    let text = stdout(&workbench(
+        &["summary", "EVAL-REPEATS"],
+        &[("WORKBENCH_STORE", &store)],
+    ));
+    assert!(
+        text.contains("reliability passes every run 0.667 (8 of 12 repeated task(s)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("flaky: TASK-8 1/2, TASK-9 1/2 (computed)"),
+        "{text}"
+    );
+
+    let report = stdout(&workbench(
+        &["report", "EVAL-REPEATS"],
+        &[("WORKBENCH_STORE", &store)],
+    ));
+    assert!(
+        report.contains("## Reliability\n\n- EVAL-REPEATS: passes every run 0.667"),
+        "{report}"
+    );
+
+    // The mandatory consistency gate passes (0.667 ≥ 0.6); the optional
+    // lower-bound gate does not (Wilson lower bound ≈ 0.39 < 0.5).
+    let passport = workbench(
+        &["passport", "EVAL-REPEATS", "--reviewer", "R", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let out: Value = serde_json::from_str(&stdout(&passport)).unwrap();
+    assert_eq!(out["gates"][0]["status"], "pass", "{out:#}");
+    assert_eq!(out["gates"][1]["status"], "fail", "{out:#}");
+    assert_eq!(out["gates"][1]["category"], "reliability");
+    assert_eq!(out["outcome"], "conditionally_approved");
+    assert_eq!(out["passport"]["passport_status"], "draft");
+}

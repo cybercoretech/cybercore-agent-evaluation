@@ -136,6 +136,21 @@ REPORTS-SLOPPY: 10 of 12 trial(s) failed or had no verdict (latest attempts)
 - **Records.** Each verified failure, and each run error, is recorded once as a contract `failure` record linked to its verification result or the run's final event. Readiness summaries use these records.
 - **Report.** `workbench report` includes a **Failures** section with each evaluation's top five groups.
 
+## 🔁 Reliability
+
+Does the agent pass a task *every time*, or only sometimes ([ADR-0029](../../docs/decisions/0029-reliability-across-repeats.md))? `workbench summary` and `workbench report` show reliability over tasks that ran at least twice. Set `repeats` in a suite to get them.
+
+```
+  reliability passes every run 0.667 (8 of 12 repeated task(s); 95% 0.39–0.86), at least once 0.833 (10 of 12; 95% 0.55–0.95); fails every run 2; flaky: TASK-8 1/2, TASK-9 1/2 (computed)
+```
+
+- **Passes every run:** the share of repeated tasks where every latest attempt passed.
+- **At least once:** the share where some run passed. The gap between the two is inconsistency.
+- **Flaky tasks** passed some runs but not all. **Fails every run** marks capability gaps, not flakiness.
+- **The unit is the task,** so the 95% ranges are Wilson intervals over tasks. Below 10 repeated tasks, or with unrun trials, the result is descriptive only. `--json` adds a `reliability` object.
+- **Readiness gates** can require consistency with `all_runs_pass_rate` or `all_runs_pass_rate_lower_bound`.
+- **Not stored as metric records:** the contract defines metrics per planned trial, and this one is per task.
+
 ## 🎫 Readiness passports
 
 `workbench passport EVAL --reviewer NAME` decides whether an agent is ready for a workload, using gates **declared in advance** ([ADR-0028](../../docs/decisions/0028-readiness-passports.md)). It records a readiness decision and a capability passport.
@@ -167,7 +182,7 @@ REPORTS-CAREFUL: readiness for summing numbers into a report file (supervised)
 ```
 
 - **Gate types:**
-  - **Metric gates** take `pass_rate`, `pass_rate_lower_bound`, `wall_time_median_ms`, `wall_time_p90_ms`, `tokens_per_trial` or `cost_per_trial` (in currency units), with exactly one of `at_least` or `at_most`.
+  - **Metric gates** take `pass_rate`, `pass_rate_lower_bound`, `all_runs_pass_rate`, `all_runs_pass_rate_lower_bound`, `wall_time_median_ms`, `wall_time_p90_ms`, `tokens_per_trial` or `cost_per_trial` (in currency units), with exactly one of `at_least` or `at_most`.
   - **Criteria gates** allow at most `max_failures` (default 0) failures of named criteria, and need every trial with an outcome to have judged them.
   - Gates are mandatory unless they say `"mandatory": false`. The category defaults to capability, operational or safety.
 - **The outcome follows the gates:**

@@ -2,8 +2,9 @@
 
 use cybercore_evaluation_store::analysis::{
     compare, compare_resources, pass_rate, record_comparison, record_resource_comparisons,
-    record_summary, resource_summaries, Comparison, EvaluationOutcomes, PassRate,
-    ResourceComparison, ResourceMetric, ResourceSummary, SummaryRecords, CONFIDENCE_LEVEL,
+    record_summary, reliability, resource_summaries, Comparison, EvaluationOutcomes, PassRate,
+    Reliability, ResourceComparison, ResourceMetric, ResourceSummary, SummaryRecords,
+    CONFIDENCE_LEVEL,
 };
 use cybercore_evaluation_store::LocalStore;
 use serde_json::{json, Value};
@@ -171,6 +172,64 @@ fn say_notes(notes: &[&String]) -> Result<(), String> {
     Ok(())
 }
 
+/// A task revision's key, else its ID.
+pub(crate) fn task_key(store: &LocalStore, task_id: &str) -> String {
+    store
+        .metadata()
+        .get_record(task_id)
+        .ok()
+        .flatten()
+        .and_then(|r| r["task_key"].as_str().map(str::to_string))
+        .unwrap_or_else(|| task_id.to_string())
+}
+
+/// One sentence on reliability across repeats, for people.
+pub(crate) fn reliability_text(r: &Reliability, key: impl Fn(&str) -> String) -> String {
+    let (Some(all), Some(any)) = (r.all_runs_pass_rate, r.any_run_pass_rate) else {
+        return format!("no data ({})", r.status.replace('_', " "));
+    };
+    let range = |i: Option<(f64, f64)>| {
+        i.map(|(l, u)| format!("; 95% {l:.2}–{u:.2}"))
+            .unwrap_or_default()
+    };
+    let flaky = if r.flaky.is_empty() {
+        "none".to_string()
+    } else {
+        r.flaky
+            .iter()
+            .map(|t| format!("{} {}/{}", key(&t.task_id), t.passes, t.counted))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "passes every run {all:.3} ({} of {} repeated task(s){}), at least once {any:.3} ({} of {}{}); fails every run {}; flaky: {flaky} ({})",
+        r.all_runs_pass,
+        r.repeated_tasks,
+        range(r.all_runs_interval),
+        r.all_runs_pass + r.flaky.len() as u64,
+        r.repeated_tasks,
+        range(r.any_run_interval),
+        r.all_runs_fail,
+        r.status.replace('_', " ")
+    )
+}
+
+fn reliability_json(r: &Reliability, key: impl Fn(&str) -> String) -> Value {
+    json!({
+        "status": r.status,
+        "repeated_tasks": r.repeated_tasks,
+        "single_run_tasks": r.single_run_tasks,
+        "all_runs_pass_tasks": r.all_runs_pass,
+        "all_runs_fail_tasks": r.all_runs_fail,
+        "all_runs_pass_rate": r.all_runs_pass_rate,
+        "all_runs_interval": r.all_runs_interval.map(|(l, u)| json!({"lower": l, "upper": u, "method": "wilson", "confidence_level": CONFIDENCE_LEVEL})),
+        "any_run_pass_rate": r.any_run_pass_rate,
+        "any_run_interval": r.any_run_interval.map(|(l, u)| json!({"lower": l, "upper": u, "method": "wilson", "confidence_level": CONFIDENCE_LEVEL})),
+        "flaky_tasks": r.flaky.iter().map(|t| json!({"task": key(&t.task_id), "passes": t.passes, "trials": t.counted})).collect::<Vec<_>>(),
+        "limitations": r.limitations,
+    })
+}
+
 fn rate_text(rate: &PassRate) -> String {
     match rate.estimate {
         None => "no data".into(),
@@ -182,6 +241,8 @@ pub fn summary(store_dir: &Path, evaluation_id: &str, as_json: bool) -> Result<(
     let store = open(store_dir)?;
     let (outcomes, rate, records) = summarise(&store, evaluation_id)?;
     let resources = resource_summaries(&outcomes);
+    let repeats = reliability(&outcomes);
+    let key = |id: &str| task_key(&store, id);
     if as_json {
         let mut out = rate_json(evaluation_id, &rate, &records);
         if let Some(map) = out.as_object_mut() {
@@ -189,6 +250,7 @@ pub fn summary(store_dir: &Path, evaluation_id: &str, as_json: bool) -> Result<(
                 "speed_and_cost".into(),
                 resources_json(&resources, &records),
             );
+            map.insert("reliability".into(), reliability_json(&repeats, key));
         }
         say!(
             "{}",
@@ -221,8 +283,11 @@ pub fn summary(store_dir: &Path, evaluation_id: &str, as_json: bool) -> Result<(
     for line in resource_lines(&resources) {
         say!("{line}");
     }
+    say!("  reliability {}", reliability_text(&repeats, key));
     say_notes(&notes(
-        std::iter::once(&rate.limitations).chain(resources.iter().map(|s| &s.limitations)),
+        std::iter::once(&rate.limitations)
+            .chain(resources.iter().map(|s| &s.limitations))
+            .chain(std::iter::once(&repeats.limitations)),
     ))?;
     say!(
         "  recorded    {}, {} and {} speed and cost result(s)",

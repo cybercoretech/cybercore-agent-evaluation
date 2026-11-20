@@ -22,6 +22,7 @@ macro_rules! say {
     }};
 }
 
+mod report;
 mod suite;
 mod summary;
 
@@ -112,6 +113,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// A shareable report of one or more evaluations (Markdown or HTML).
+    ///
+    /// The first evaluation is the baseline; each other one is compared with
+    /// it. Prints to stdout (redirect it to a file). Uses and records exactly
+    /// what `summary` and `compare` do.
+    Report {
+        /// Evaluation record IDs, baseline first.
+        #[arg(required = true)]
+        evaluation_ids: Vec<String>,
+        /// Output format.
+        #[arg(long, value_parser = ["markdown", "html"], default_value = "markdown")]
+        format: String,
+    },
     /// Compare two evaluations run on the same tasks (paired by task).
     ///
     /// Evaluations over different task revisions are reported as not
@@ -142,6 +156,10 @@ fn main() -> ExitCode {
                 evaluation_id,
                 json,
             } => summary::summary(&store, &evaluation_id, json),
+            Command::Report {
+                evaluation_ids,
+                format,
+            } => report::report(&store, &evaluation_ids, &format),
             Command::Compare {
                 baseline,
                 treatment,

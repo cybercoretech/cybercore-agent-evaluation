@@ -1954,3 +1954,89 @@ fn reference_agent_runs_through_egress_against_the_fake_api() {
         }
     }
 }
+
+#[test]
+fn reports_render_in_markdown_and_html() {
+    let dir = TempDir::new("report");
+    let store = dir.0.join("store");
+    let suite = dir.file("suite.json", &load_example("report-suite.json"));
+    let output = workbench(
+        &["run", suite.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let md = workbench(
+        &["report", "REPORTS-SLOPPY", "REPORTS-CAREFUL"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(md.status.success(), "{}", stderr(&md));
+    let md = stdout(&md);
+    assert!(
+        md.starts_with("# Evaluation report: REPORTS-CAREFUL vs REPORTS-SLOPPY\n"),
+        "{md}"
+    );
+    assert!(md.contains("| REPORTS-SLOPPY | 0.167 (2 of 12;"), "{md}");
+    assert!(md.contains("| REPORTS-CAREFUL | 1.000 (12 of 12;"), "{md}");
+    assert!(
+        md.contains("Inference: confirmatory (predeclared as CAREFUL-vs-SLOPPY)"),
+        "{md}"
+    );
+    assert!(md.contains("| SMALL | arithmetic | 0/2 ✗ | 2/2 |"), "{md}");
+    assert!(md.contains("| ONES | arithmetic | 2/2 | 2/2 |"), "{md}");
+    assert!(
+        md.contains("## Caveats") && md.contains("not a bill"),
+        "{md}"
+    );
+    assert!(md.contains("PLAN-REPORTS-CAREFUL (sha256"), "{md}");
+    // Every caveat is said once.
+    assert_eq!(md.matches("not a bill").count(), 1);
+
+    let page = workbench(
+        &[
+            "report",
+            "REPORTS-SLOPPY",
+            "REPORTS-CAREFUL",
+            "--format",
+            "html",
+        ],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(page.status.success(), "{}", stderr(&page));
+    let page = stdout(&page);
+    assert!(page.starts_with("<!doctype html>"));
+    assert!(page.contains("<td class=\"bad\">0/2 ✗</td>"));
+    assert!(!page.contains("<script") && !page.contains("https://"));
+
+    // A single evaluation, and an unknown one.
+    let one = workbench(
+        &["report", "REPORTS-CAREFUL"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(stdout(&one).starts_with("# Evaluation report: REPORTS-CAREFUL\n"));
+    assert!(!stdout(&one).contains("(baseline)"));
+    let unknown = workbench(&["report", "NOPE"], &[("WORKBENCH_STORE", &store)]);
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(
+        stderr(&unknown).contains("unknown evaluation NOPE"),
+        "{}",
+        stderr(&unknown)
+    );
+    let bad_format = workbench(
+        &["report", "REPORTS-CAREFUL", "--format", "pdf"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert_eq!(bad_format.status.code(), Some(2));
+}

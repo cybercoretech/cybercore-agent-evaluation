@@ -118,6 +118,24 @@ EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
   Otherwise it stays exploratory and says why.
 - **The rule:** it's the declared one, applied unchanged. McNemar's exact test (or, with repeated tasks, the paired bootstrap interval) at `alpha`, split Bonferroni-style across the plan's comparisons. With a threshold, the difference is also judged meaningful, not meaningful, or uncertain.
 
+## 📝 Reports
+
+`workbench report` turns one or more evaluations into a single page you can share ([ADR-0026](../../docs/decisions/0026-workbench-report.md)). The first evaluation is the baseline, and each of the others is compared with it:
+
+```sh
+workbench report REPORTS-SLOPPY REPORTS-CAREFUL > report.md
+workbench report REPORTS-SLOPPY REPORTS-CAREFUL --format html > report.html
+```
+
+- **What's on the page:**
+  - a results table: pass rate with its interval and status, median time, tokens and cost per trial;
+  - each comparison, with its inference (for example "confirmatory (predeclared as CAREFUL-vs-SLOPPY)"), plus speed and cost;
+  - a by-task table of passes out of trials, with failures marked ✗;
+  - every caveat, said once;
+  - the record IDs behind each number, and the frozen plan's digest.
+- **Same numbers as the commands.** The report computes and records exactly what `summary` and `compare` do.
+- **Output.** It prints to stdout, so it never overwrites a file you didn't name. The HTML is one self-contained file, with no scripts or outside links, and works in light and dark mode.
+
 ## ⏱️ Speed and cost
 
 `workbench summary` also reports how long each trial took and, when the agent says so, how many tokens it used and what that cost ([ADR-0022](../../docs/decisions/0022-speed-and-cost-metrics.md)). `workbench compare` pairs them by task.

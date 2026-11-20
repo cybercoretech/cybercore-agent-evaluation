@@ -9,14 +9,14 @@ use cybercore_evaluation_store::LocalStore;
 use serde_json::{json, Value};
 use std::path::Path;
 
-fn open(store_dir: &Path) -> Result<LocalStore, String> {
+pub(crate) fn open(store_dir: &Path) -> Result<LocalStore, String> {
     if !store_dir.join("metadata.sqlite3").is_file() {
         return Err(format!("no workbench store at {}", store_dir.display()));
     }
     LocalStore::open(store_dir).map_err(|e| format!("{}: {e}", store_dir.display()))
 }
 
-fn summarise(
+pub(crate) fn summarise(
     store: &LocalStore,
     evaluation_id: &str,
 ) -> Result<(EvaluationOutcomes, PassRate, SummaryRecords), String> {
@@ -79,7 +79,7 @@ fn resources_json(summaries: &[ResourceSummary], records: &SummaryRecords) -> Va
 }
 
 /// A value in the metric's unit, for people: seconds, tokens or currency.
-fn amount(metric: ResourceMetric, value: f64, currency: Option<&str>) -> String {
+pub(crate) fn amount(metric: ResourceMetric, value: f64, currency: Option<&str>) -> String {
     match metric {
         ResourceMetric::WallTime if value.abs() >= 1000.0 => format!("{:.2} s", value / 1000.0),
         ResourceMetric::WallTime => format!("{value:.0} ms"),

@@ -762,6 +762,7 @@ mod tests {
             attempts: u64::from(outcome != TrialOutcome::NotRun),
             wall_time_ms: ms,
             usage,
+            latest_run_id: None,
         }
     }
 

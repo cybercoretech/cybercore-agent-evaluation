@@ -2040,3 +2040,117 @@ fn reports_render_in_markdown_and_html() {
     );
     assert_eq!(bad_format.status.code(), Some(2));
 }
+
+#[test]
+fn failures_are_grouped_and_recorded() {
+    let dir = TempDir::new("failures");
+    let store = dir.0.join("store");
+    let mut suite = load_example("report-suite.json");
+    // A third agent that always crashes: its runs never reach the verifier.
+    suite["agents"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!(
+            {"agent_id": "CRASHY", "executable_id": "sh", "args": ["-c", "echo boom >&2; exit 3"]}
+        ));
+    let file = dir.file("suite.json", &suite);
+    let output = workbench(
+        &["run", file.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let sloppy = workbench(
+        &["failures", "REPORTS-SLOPPY", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(sloppy.status.success(), "{}", stderr(&sloppy));
+    let out: Value = serde_json::from_str(&stdout(&sloppy)).unwrap();
+    assert_eq!(out["failing_trials"], 10);
+    let groups = out["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{out:#}");
+    let group = &groups[0];
+    assert_eq!(group["kind"], "criterion");
+    assert_eq!(group["key"], "total-written");
+    assert_eq!(
+        (
+            group["failing_trials"].as_u64(),
+            group["judged_trials"].as_u64()
+        ),
+        (Some(10), Some(12))
+    );
+    assert_eq!(
+        group["tasks"],
+        serde_json::json!(["SMALL", "TENS", "MIXED", "BIG", "LONG"])
+    );
+    assert_eq!(
+        group["families"],
+        serde_json::json!([
+            {"family": "arithmetic", "failing": 8, "judged": 10},
+            {"family": "arithmetic-long", "failing": 2, "judged": 2}
+        ])
+    );
+    assert_eq!(
+        group["requirement"],
+        "Exact check: file equals on out/report.txt."
+    );
+    let ids = out["failure_record_ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 10);
+    // Recording is write-once: the same IDs again.
+    let again = workbench(
+        &["failures", "REPORTS-SLOPPY", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let again: Value = serde_json::from_str(&stdout(&again)).unwrap();
+    assert_eq!(again["failure_record_ids"], out["failure_record_ids"]);
+
+    let crashy = workbench(
+        &["failures", "REPORTS-CRASHY"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let text = stdout(&crashy);
+    assert!(
+        text.contains("REPORTS-CRASHY: 12 of 12 trial(s) failed or had no verdict"),
+        "{text}"
+    );
+    assert!(
+        text.contains("12 run(s) ended without a verdict · 6 task(s)"),
+        "{text}"
+    );
+    assert!(text.contains("recorded    12 failure record(s)"), "{text}");
+
+    let careful = workbench(
+        &["failures", "REPORTS-CAREFUL"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(stdout(&careful).contains("no failures"));
+
+    let report = workbench(
+        &[
+            "report",
+            "REPORTS-CAREFUL",
+            "REPORTS-SLOPPY",
+            "REPORTS-CRASHY",
+        ],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let md = stdout(&report);
+    assert!(
+        md.contains("## Failures\n\n### REPORTS-CAREFUL\n\nNo failures in the latest attempts."),
+        "{md}"
+    );
+    assert!(md.contains("- total-written: failed 10 of 12 trial(s) · 5 task(s): SMALL, TENS, MIXED, BIG, LONG; families: arithmetic 8/10"), "{md}");
+    assert!(md.contains("12 run(s) ended without a verdict"), "{md}");
+}

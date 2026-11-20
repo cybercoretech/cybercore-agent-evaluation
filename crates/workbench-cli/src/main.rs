@@ -22,6 +22,7 @@ macro_rules! say {
     }};
 }
 
+mod failures;
 mod report;
 mod suite;
 mod summary;
@@ -113,6 +114,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Which checks fail, on which tasks, and why runs had no verdict.
+    ///
+    /// Groups each trial's latest attempt by failed criterion, by criteria
+    /// without a verdict, and by run errors. Records a failure record per
+    /// verified failure (once).
+    Failures {
+        /// Evaluation record ID.
+        evaluation_id: String,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// A shareable report of one or more evaluations (Markdown or HTML).
     ///
     /// The first evaluation is the baseline; each other one is compared with
@@ -156,6 +169,10 @@ fn main() -> ExitCode {
                 evaluation_id,
                 json,
             } => summary::summary(&store, &evaluation_id, json),
+            Command::Failures {
+                evaluation_id,
+                json,
+            } => failures::failures(&store, &evaluation_id, json),
             Command::Report {
                 evaluation_ids,
                 format,

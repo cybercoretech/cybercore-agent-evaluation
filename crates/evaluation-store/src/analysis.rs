@@ -25,7 +25,12 @@ use cybercore_evaluation_core::EvaluationSchedule;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod failures;
 mod resources;
+pub use failures::{
+    analyse_failures, group_json, record_failures, FailureAnalysis, FailureGroup, FailureKind,
+    Occurrence,
+};
 pub use resources::{
     compare_resources, record_resource_comparisons, resource_summaries, resource_summary,
     ResourceComparison, ResourceMetric, ResourceSummary,
@@ -74,6 +79,8 @@ pub struct TrialResult {
     pub wall_time_ms: Option<u64>,
     /// The latest attempt's agent-reported usage (ADR-0022).
     pub usage: ReportedUsage,
+    /// The latest attempt's run record ID.
+    pub latest_run_id: Option<String>,
 }
 
 /// What a run's agent reported about its own usage.
@@ -199,6 +206,9 @@ impl EvaluationOutcomes {
                     wall_time_ms: latest
                         .and_then(|run| run["resource_usage"]["wall_time_ms"].as_u64()),
                     usage: ReportedUsage::from_run(latest),
+                    latest_run_id: latest
+                        .and_then(|run| run["record_id"].as_str())
+                        .map(str::to_string),
                 }
             })
             .collect::<Vec<_>>();
@@ -1378,6 +1388,7 @@ mod tests {
                     attempts: u64::from(*outcome != TrialOutcome::NotRun),
                     wall_time_ms: None,
                     usage: ReportedUsage::Absent,
+                    latest_run_id: None,
                 })
                 .collect(),
             plan_digest: "p".repeat(64),

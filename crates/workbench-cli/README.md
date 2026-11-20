@@ -118,6 +118,24 @@ EVAL-BASE (baseline) vs EVAL-TREAT (treatment)
   Otherwise it stays exploratory and says why.
 - **The rule:** it's the declared one, applied unchanged. McNemar's exact test (or, with repeated tasks, the paired bootstrap interval) at `alpha`, split Bonferroni-style across the plan's comparisons. With a threshold, the difference is also judged meaningful, not meaningful, or uncertain.
 
+## 🔍 Failures
+
+`workbench failures EVAL` shows what went wrong in each trial's latest attempt ([ADR-0027](../../docs/decisions/0027-failure-analysis.md)). `--json` gives the same data as JSON.
+
+```
+REPORTS-SLOPPY: 10 of 12 trial(s) failed or had no verdict (latest attempts)
+
+  total-written: failed 10 of 12 trial(s) · 5 task(s): SMALL, TENS, MIXED, BIG, LONG
+    families: arithmetic 8/10, arithmetic-long 2/2
+    requirement: Exact check: file equals on out/report.txt.
+```
+
+- **Failed checks** are grouped by criterion: how many trials and which tasks, a per-family breakdown, and the requirement from the task record. For model-judge criteria, it shows up to two short judge rationales.
+- **Verdicts that are neither pass nor fail** are grouped separately ("no verdict").
+- **Runs that never reached the verifier** (crashes, timeouts, limits) are grouped by their recorded error, so a broken run isn't counted as a wrong answer.
+- **Records.** Each verified failure, and each run error, is recorded once as a contract `failure` record linked to its verification result or the run's final event. Readiness summaries use these records.
+- **Report.** `workbench report` includes a **Failures** section with each evaluation's top five groups.
+
 ## 📝 Reports
 
 `workbench report` turns one or more evaluations into a single page you can share ([ADR-0026](../../docs/decisions/0026-workbench-report.md)). The first evaluation is the baseline, and each of the others is compared with it:

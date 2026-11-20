@@ -23,6 +23,7 @@ macro_rules! say {
 }
 
 mod failures;
+mod passport;
 mod report;
 mod suite;
 mod summary;
@@ -126,6 +127,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Evaluate the readiness gates declared in advance and record a
+    /// readiness decision and capability passport.
+    ///
+    /// Only gates frozen in the evaluation's plan are used. An approved
+    /// decision issues an active passport that expires; any other outcome a
+    /// draft that says why. Repeating over unchanged results returns the
+    /// same passport.
+    Passport {
+        /// Evaluation record ID.
+        evaluation_id: String,
+        /// Who signs the decision (recorded).
+        #[arg(long, value_name = "NAME")]
+        reviewer: String,
+        /// Print JSON (the gates, decision and passport records).
+        #[arg(long)]
+        json: bool,
+    },
     /// A shareable report of one or more evaluations (Markdown or HTML).
     ///
     /// The first evaluation is the baseline; each other one is compared with
@@ -173,6 +191,11 @@ fn main() -> ExitCode {
                 evaluation_id,
                 json,
             } => failures::failures(&store, &evaluation_id, json),
+            Command::Passport {
+                evaluation_id,
+                reviewer,
+                json,
+            } => passport::passport(&store, &evaluation_id, &reviewer, json),
             Command::Report {
                 evaluation_ids,
                 format,
@@ -597,6 +620,34 @@ fn print_plan(store_dir: &Path, evaluation: &EvaluationFile) -> Result<(), Strin
                         .unwrap_or_default()
                 );
             }
+        }
+    }
+    if let Some(readiness) = &evaluation.readiness {
+        say!(
+            "readiness   frozen at first run: {} ({}), passports valid {} day(s)",
+            readiness.workload.trim(),
+            readiness.autonomy_level,
+            readiness.valid_for_days
+        );
+        for gate in &readiness.gates {
+            let rule = match (&gate.metric, &gate.criteria) {
+                (Some(metric), _) => match (gate.at_least, gate.at_most) {
+                    (Some(min), _) => format!("{metric} ≥ {min}"),
+                    (_, Some(max)) => format!("{metric} ≤ {max}"),
+                    _ => metric.clone(),
+                },
+                (_, Some(criteria)) => format!(
+                    "at most {} failure(s) of {}",
+                    gate.max_failures.unwrap_or(0),
+                    criteria.join(", ")
+                ),
+                _ => String::new(),
+            };
+            say!(
+                "            {}: {rule}{}",
+                gate.gate_id,
+                if gate.mandatory { "" } else { " (optional)" }
+            );
         }
     }
     if evaluation.collects_outputs() {

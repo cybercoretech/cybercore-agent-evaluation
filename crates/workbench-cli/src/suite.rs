@@ -57,6 +57,10 @@ pub struct Suite {
     /// `created_at` for the generated task revisions (RFC 3339).
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Readiness gates (ADR-0028), declared in every agent's evaluation and
+    /// frozen with its plan.
+    #[serde(default)]
+    pub readiness: Option<Value>,
 }
 
 fn one() -> u32 {
@@ -630,6 +634,9 @@ impl Suite {
                     }
                     if let Some(pricing) = &self.pricing {
                         map.insert("pricing".into(), pricing.clone());
+                    }
+                    if let Some(readiness) = &self.readiness {
+                        map.insert("readiness".into(), readiness.clone());
                     }
                 }
                 Expanded {

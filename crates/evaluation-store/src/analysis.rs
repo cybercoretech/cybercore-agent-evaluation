@@ -26,10 +26,14 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod failures;
+mod readiness;
 mod resources;
 pub use failures::{
     analyse_failures, group_json, record_failures, FailureAnalysis, FailureGroup, FailureKind,
     Occurrence,
+};
+pub use readiness::{
+    evaluate_readiness, issue_passport, latest_passport, GateResult, IssuedPassport, Readiness,
 };
 pub use resources::{
     compare_resources, record_resource_comparisons, resource_summaries, resource_summary,
@@ -973,6 +977,9 @@ pub struct PlanDeclaration {
     pub task_families: Vec<String>,
     pub operating_conditions: Vec<String>,
     pub comparisons: Vec<ComparisonDeclaration>,
+    /// Readiness gates (the contract's `analysis_plan.readiness`), frozen
+    /// with the plan (ADR-0028).
+    pub readiness: Option<Value>,
 }
 
 /// Result of [`freeze_plan`].
@@ -1049,10 +1056,19 @@ pub fn freeze_plan(
         "missing_data_policy": "Trials without a verdict count as not passed and are reported as missing.",
         "exclusion_policy": "Only runs recorded as invalid are excluded.",
     });
+    let mut gates = gates;
+    if let Some(readiness) = &declaration.readiness {
+        gates.extend(readiness_gate_texts(readiness));
+    }
     if let Some(map) = analysis_plan.as_object_mut() {
         if !gates.is_empty() {
             map.insert("decision_gates".into(), json!(gates));
+        }
+        if !comparisons.is_empty() {
             map.insert("comparisons".into(), json!(comparisons));
+        }
+        if let Some(readiness) = &declaration.readiness {
+            map.insert("readiness".into(), readiness.clone());
         }
     }
     let task_families = if declaration.task_families.is_empty() {
@@ -1128,6 +1144,50 @@ pub fn freeze_plan(
     }
     meta.put_record(&record)?;
     Ok(FreezeOutcome::Frozen { plan_id, frozen_at })
+}
+
+/// Readable descriptions of declared readiness gates, for `decision_gates`.
+fn readiness_gate_texts(readiness: &Value) -> Vec<String> {
+    let workload = readiness["workload"].as_str().unwrap_or("the workload");
+    readiness["gates"]
+        .as_array()
+        .map(|gates| {
+            gates
+                .iter()
+                .map(|g| {
+                    let rule = match (g["metric"].as_str(), g["criteria"].as_array()) {
+                        (Some(metric), _) => {
+                            match (g["at_least"].as_f64(), g["at_most"].as_f64()) {
+                                (Some(min), _) => format!("{metric} at least {min}"),
+                                (_, Some(max)) => format!("{metric} at most {max}"),
+                                _ => metric.to_string(),
+                            }
+                        }
+                        (_, Some(criteria)) => format!(
+                            "at most {} failure(s) of {}",
+                            g["max_failures"].as_u64().unwrap_or(0),
+                            criteria
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        _ => "unspecified".to_string(),
+                    };
+                    format!(
+                        "readiness for {workload}: {} ({}, {}): {rule}.",
+                        g["gate_id"].as_str().unwrap_or("gate"),
+                        g["gate_category"].as_str().unwrap_or("other"),
+                        if g["mandatory"].as_bool() == Some(true) {
+                            "mandatory"
+                        } else {
+                            "optional"
+                        }
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A plan body that names a different pass-rate metric definition.

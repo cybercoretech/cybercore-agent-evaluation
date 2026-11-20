@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod failures;
 mod readiness;
+mod reliability;
 mod resources;
 pub use failures::{
     analyse_failures, group_json, record_failures, FailureAnalysis, FailureGroup, FailureKind,
@@ -35,6 +36,7 @@ pub use failures::{
 pub use readiness::{
     evaluate_readiness, issue_passport, latest_passport, GateResult, IssuedPassport, Readiness,
 };
+pub use reliability::{reliability, Reliability, TaskRuns};
 pub use resources::{
     compare_resources, record_resource_comparisons, resource_summaries, resource_summary,
     ResourceComparison, ResourceMetric, ResourceSummary,

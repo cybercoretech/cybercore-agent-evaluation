@@ -70,6 +70,7 @@ fn strings(value: &Value) -> Vec<String> {
 
 fn metric_value(
     metric: &str,
+    outcomes: &EvaluationOutcomes,
     rate: &PassRate,
     resources: &[ResourceSummary],
 ) -> Result<(f64, String), String> {
@@ -102,6 +103,25 @@ fn metric_value(
                     format!(
                         "pass rate lower bound {lower:.3} ({})",
                         method.replace('_', " ")
+                    ),
+                ))
+            }
+        }
+        "all_runs_pass_rate" | "all_runs_pass_rate_lower_bound" => {
+            let r = super::reliability(outcomes);
+            if r.status != "computed" {
+                return Err(format!("reliability is {}", r.status.replace('_', " ")));
+            }
+            if metric == "all_runs_pass_rate" {
+                let v = r.all_runs_pass_rate.ok_or("no reliability")?;
+                Ok((v, format!("{v:.3} of repeated tasks passed every run")))
+            } else {
+                let (lower, _) = r.all_runs_interval.ok_or("no interval")?;
+                Ok((
+                    lower,
+                    format!(
+                        "passes-every-run lower bound {lower:.3} (Wilson over {} tasks)",
+                        r.repeated_tasks
                     ),
                 ))
             }
@@ -180,7 +200,7 @@ pub fn evaluate_readiness(
         let mandatory = gate["mandatory"].as_bool().unwrap_or(true);
         let criteria = strings(&gate["criteria"]);
         let (status, rationale, evidence) = if let Some(metric) = gate["metric"].as_str() {
-            match metric_value(metric, rate, resources) {
+            match metric_value(metric, outcomes, rate, resources) {
                 Err(why) => (
                     "inconclusive",
                     format!("Cannot judge {metric}: {why}."),

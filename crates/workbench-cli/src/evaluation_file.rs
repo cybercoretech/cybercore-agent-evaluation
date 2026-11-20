@@ -115,6 +115,8 @@ const AUTONOMY: &[&str] = &[
 const GATE_METRICS: &[&str] = &[
     "pass_rate",
     "pass_rate_lower_bound",
+    "all_runs_pass_rate",
+    "all_runs_pass_rate_lower_bound",
     "wall_time_median_ms",
     "wall_time_p90_ms",
     "tokens_per_trial",
@@ -799,7 +801,11 @@ impl EvaluationFile {
                             ))
                         }
                     };
-                    let ceiling = if metric.starts_with("pass_rate") { 1.0 } else { f64::MAX };
+                    let ceiling = if metric.starts_with("pass_rate") || metric.starts_with("all_runs") {
+                        1.0
+                    } else {
+                        f64::MAX
+                    };
                     if !threshold.is_finite() || !(0.0..=ceiling).contains(&threshold) {
                         return Err(format!(
                             "{at} threshold must be {}",
@@ -840,6 +846,7 @@ impl EvaluationFile {
                 let category = g.category.clone().unwrap_or_else(|| {
                     match (g.metric.as_deref(), &g.criteria) {
                         (Some(m), _) if m.starts_with("pass_rate") => "capability",
+                        (Some(m), _) if m.starts_with("all_runs") => "reliability",
                         (Some(_), _) => "operational",
                         _ => "safety",
                     }

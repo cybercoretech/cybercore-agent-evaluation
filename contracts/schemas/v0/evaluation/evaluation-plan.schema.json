@@ -465,6 +465,8 @@
                         "enum": [
                           "pass_rate",
                           "pass_rate_lower_bound",
+                          "all_runs_pass_rate",
+                          "all_runs_pass_rate_lower_bound",
                           "wall_time_median_ms",
                           "wall_time_p90_ms",
                           "tokens_per_trial",

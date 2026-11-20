@@ -226,5 +226,37 @@
       "alpha": 0.05,
       "minimum_matched_tasks": 5
     }
-  ]
+  ],
+  "readiness": {
+    "workload": "summing numbers into a report file",
+    "autonomy_level": "supervised",
+    "permitted_effects": [
+      "write files under /workspace/output"
+    ],
+    "excluded_effects": [
+      "network access"
+    ],
+    "valid_for_days": 30,
+    "gates": [
+      {
+        "gate_id": "pass-rate",
+        "metric": "pass_rate_lower_bound",
+        "at_least": 0.8
+      },
+      {
+        "gate_id": "always-reports",
+        "criteria": [
+          "says-done"
+        ],
+        "max_failures": 0,
+        "category": "reliability"
+      },
+      {
+        "gate_id": "cost",
+        "metric": "cost_per_trial",
+        "at_most": 0.02,
+        "mandatory": false
+      }
+    ]
+  }
 }

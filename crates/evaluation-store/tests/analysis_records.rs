@@ -123,6 +123,7 @@ fn declaration(question: &str) -> PlanDeclaration {
         task_families: vec![],
         operating_conditions: vec!["runner local_bubblewrap".into()],
         comparisons: vec![],
+        readiness: None,
     }
 }
 

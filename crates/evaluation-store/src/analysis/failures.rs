@@ -88,6 +88,8 @@ pub struct FailureAnalysis {
     pub groups: Vec<FailureGroup>,
     /// Task revision ID → (task key, family), from stored task revisions.
     pub tasks: BTreeMap<String, (String, String)>,
+    /// Criterion ID → trials whose latest attempt judged it (passing ones too).
+    pub judged_criteria: BTreeMap<String, u64>,
 }
 
 impl FailureAnalysis {
@@ -262,6 +264,10 @@ pub fn analyse_failures(
         failing_trials,
         groups,
         tasks,
+        judged_criteria: judged
+            .iter()
+            .map(|(criterion, trials)| (criterion.clone(), trials.len() as u64))
+            .collect(),
     })
 }
 
@@ -409,6 +415,7 @@ mod tests {
                 ("A".to_string(), ("a".to_string(), "fam-1".to_string())),
                 ("B".to_string(), ("b".to_string(), "fam-2".to_string())),
             ]),
+            judged_criteria: BTreeMap::new(),
         };
         assert_eq!(
             analysis.families(&group),

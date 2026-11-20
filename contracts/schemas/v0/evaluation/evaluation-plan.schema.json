@@ -393,6 +393,165 @@
                 "additionalProperties": false
               },
               "uniqueItems": true
+            },
+            "readiness": {
+              "description": "Readiness gates declared in advance (ADR-0028). A readiness decision and capability passport evaluate exactly these gates; they cannot change once the plan is frozen.",
+              "type": "object",
+              "properties": {
+                "workload": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "autonomy_level": {
+                  "type": "string",
+                  "enum": [
+                    "assisted",
+                    "supervised",
+                    "bounded_autonomous",
+                    "high_autonomy"
+                  ]
+                },
+                "permitted_effects": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "excluded_effects": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "valid_for_days": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 365
+                },
+                "gates": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "gate_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      },
+                      "gate_category": {
+                        "type": "string",
+                        "enum": [
+                          "safety",
+                          "security",
+                          "privacy",
+                          "reliability",
+                          "capability",
+                          "operational",
+                          "compliance",
+                          "other"
+                        ]
+                      },
+                      "mandatory": {
+                        "type": "boolean"
+                      },
+                      "metric": {
+                        "type": "string",
+                        "enum": [
+                          "pass_rate",
+                          "pass_rate_lower_bound",
+                          "wall_time_median_ms",
+                          "wall_time_p90_ms",
+                          "tokens_per_trial",
+                          "cost_per_trial"
+                        ]
+                      },
+                      "at_least": {
+                        "type": "number"
+                      },
+                      "at_most": {
+                        "type": "number"
+                      },
+                      "criteria": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 64,
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        }
+                      },
+                      "max_failures": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "gate_id",
+                      "gate_category",
+                      "mandatory"
+                    ],
+                    "additionalProperties": false,
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "metric"
+                        ],
+                        "properties": {
+                          "metric": {}
+                        },
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "at_least"
+                            ],
+                            "properties": {
+                              "at_least": {}
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "at_most"
+                            ],
+                            "properties": {
+                              "at_most": {}
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "criteria",
+                          "max_failures"
+                        ],
+                        "properties": {
+                          "criteria": {},
+                          "max_failures": {}
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "workload",
+                "autonomy_level",
+                "permitted_effects",
+                "excluded_effects",
+                "valid_for_days",
+                "gates"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

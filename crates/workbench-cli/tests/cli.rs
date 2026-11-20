@@ -2154,3 +2154,235 @@ fn failures_are_grouped_and_recorded() {
     assert!(md.contains("- total-written: failed 10 of 12 trial(s) · 5 task(s): SMALL, TENS, MIXED, BIG, LONG; families: arithmetic 8/10"), "{md}");
     assert!(md.contains("12 run(s) ended without a verdict"), "{md}");
 }
+
+#[test]
+fn passports_follow_gates_declared_in_advance() {
+    let dir = TempDir::new("passport");
+    let store = dir.0.join("store");
+    let suite = dir.file("suite.json", &load_example("report-suite.json"));
+    let plan = workbench(
+        &["run", suite.to_str().unwrap(), "--dry-run"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(stdout(&plan).contains(
+        "readiness   frozen at first run: summing numbers into a report file (supervised)"
+    ));
+    let output = workbench(
+        &["run", suite.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    if !output.status.success() && stderr(&output).contains("runner:") {
+        assert!(
+            std::env::var_os("WORKBENCH_REQUIRE_BWRAP").is_none(),
+            "WORKBENCH_REQUIRE_BWRAP is set but Bubblewrap is unavailable: {}",
+            stderr(&output).trim()
+        );
+        eprintln!(
+            "SKIPPED: Bubblewrap is unavailable here: {}",
+            stderr(&output).trim()
+        );
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("froze analysis plan PLAN-REPORTS-SLOPPY"),
+        "readiness alone freezes a plan"
+    );
+
+    let careful = workbench(
+        &[
+            "passport",
+            "REPORTS-CAREFUL",
+            "--reviewer",
+            "Test Reviewer",
+            "--json",
+        ],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(careful.status.success(), "{}", stderr(&careful));
+    let out: Value = serde_json::from_str(&stdout(&careful)).unwrap();
+    assert_eq!(out["outcome"], "approved", "{out:#}");
+    assert_eq!(out["passport"]["passport_status"], "active");
+    assert!(out["passport"]["expires_at"].is_string());
+    assert_eq!(out["decision"]["reviewer"], "Test Reviewer");
+    assert_eq!(out["decision"]["decision_type"], "readiness");
+    assert_eq!(out["passport"]["trial_summary"]["pass_trials"], 12);
+    assert_eq!(
+        out["passport"]["scope"]["workload_families"],
+        serde_json::json!(["summing numbers into a report file"])
+    );
+    let dimensions: Vec<&str> = out["passport"]["capability_dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["dimension_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(dimensions, ["arithmetic", "arithmetic-long"]);
+    let passport_id = out["passport"]["record_id"].as_str().unwrap().to_string();
+
+    let sloppy = workbench(
+        &[
+            "passport",
+            "REPORTS-SLOPPY",
+            "--reviewer",
+            "Test Reviewer",
+            "--json",
+        ],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let out: Value = serde_json::from_str(&stdout(&sloppy)).unwrap();
+    assert_eq!(out["outcome"], "rejected");
+    assert_eq!(out["passport"]["passport_status"], "draft");
+    assert!(out["passport"].get("expires_at").is_none());
+    assert_eq!(
+        out["passport"]["known_failure_refs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        10
+    );
+    assert_eq!(out["gates"][0]["status"], "fail");
+
+    // Same results, same reviewer: the same passport, nothing new written.
+    let again = workbench(
+        &["passport", "REPORTS-CAREFUL", "--reviewer", "Test Reviewer"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let text = stdout(&again);
+    assert!(
+        text.contains(&passport_id) && text.contains("already issued"),
+        "{text}"
+    );
+
+    let report = workbench(
+        &["report", "REPORTS-SLOPPY", "REPORTS-CAREFUL"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let md = stdout(&report);
+    assert!(md.contains("## Readiness"), "{md}");
+    assert!(
+        md.contains(&format!("REPORTS-CAREFUL: {passport_id} active until")),
+        "{md}"
+    );
+    assert!(
+        md.contains("readiness decision rejected, signed by Test Reviewer"),
+        "{md}"
+    );
+
+    // A reviewer is required (usage error), and gates must exist.
+    let unsigned = workbench(
+        &["passport", "REPORTS-CAREFUL"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert_eq!(unsigned.status.code(), Some(2));
+
+    // Gates added after the first result are not "in advance".
+    let mut late = twelve_task_evaluation("EVAL-LATE", 12);
+    let file = dir.file("late.json", &late);
+    assert!(workbench(
+        &["run", file.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)]
+    )
+    .status
+    .success());
+    let none = workbench(
+        &["passport", "EVAL-LATE", "--reviewer", "R"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    assert!(
+        stderr(&none).contains("declares no readiness gates"),
+        "{}",
+        stderr(&none)
+    );
+    late["readiness"] = serde_json::json!({
+        "workload": "w", "gates": [{"gate_id": "rate", "metric": "pass_rate", "at_least": 0.5}]
+    });
+    let file = dir.file("late.json", &late);
+    assert!(workbench(
+        &["run", file.to_str().unwrap()],
+        &[("WORKBENCH_STORE", &store)]
+    )
+    .status
+    .success());
+    let late_out = workbench(
+        &["passport", "EVAL-LATE", "--reviewer", "R", "--json"],
+        &[("WORKBENCH_STORE", &store)],
+    );
+    let out: Value = serde_json::from_str(&stdout(&late_out)).unwrap();
+    assert_eq!(out["outcome"], "insufficient_evidence", "{out:#}");
+    assert_eq!(out["declared_in_advance"], false);
+    assert_eq!(out["passport"]["passport_status"], "draft");
+}
+
+#[test]
+fn readiness_specs_are_validated() {
+    let dir = TempDir::new("readiness-spec");
+    let cases: Vec<BadFileCase> = vec![
+        (
+            "autonomy",
+            Box::new(|v| v["readiness"]["autonomy_level"] = "full".into()),
+            "readiness.autonomy_level must be one of",
+        ),
+        (
+            "days",
+            Box::new(|v| v["readiness"]["valid_for_days"] = 0.into()),
+            "readiness.valid_for_days must be between 1 and 365",
+        ),
+        (
+            "no-gates",
+            Box::new(|v| v["readiness"]["gates"] = serde_json::json!([])),
+            "readiness.gates must list 1 to 32 gates",
+        ),
+        (
+            "two-forms",
+            Box::new(|v| v["readiness"]["gates"][0]["criteria"] = serde_json::json!(["says-done"])),
+            "needs exactly one of metric (with at_least or at_most) or criteria",
+        ),
+        (
+            "two-thresholds",
+            Box::new(|v| v["readiness"]["gates"][0]["at_most"] = 0.9.into()),
+            "needs exactly one of at_least or at_most",
+        ),
+        (
+            "metric",
+            Box::new(|v| v["readiness"]["gates"][0]["metric"] = "vibes".into()),
+            ".metric must be one of",
+        ),
+        (
+            "range",
+            Box::new(|v| v["readiness"]["gates"][0]["at_least"] = 1.5.into()),
+            "threshold must be between 0 and 1",
+        ),
+        (
+            "unknown-criterion",
+            Box::new(|v| v["readiness"]["gates"][1]["criteria"] = serde_json::json!(["nope"])),
+            "names \"nope\", which no trial's verifier checks",
+        ),
+        (
+            "duplicate",
+            Box::new(|v| v["readiness"]["gates"][1]["gate_id"] = "pass-rate".into()),
+            "must be a unique ID",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut value = load_example("report-suite.json");
+        mutate(&mut value);
+        let file = dir.file(&format!("{name}.json"), &value);
+        let output = workbench(
+            &[
+                "run",
+                file.to_str().unwrap(),
+                "--dry-run",
+                "--store",
+                dir.0.join("s").to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            stderr(&output).contains(expected),
+            "{name}: expected {expected:?} in {}",
+            stderr(&output)
+        );
+    }
+}

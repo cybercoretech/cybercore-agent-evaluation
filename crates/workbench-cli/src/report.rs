@@ -39,6 +39,8 @@ struct Evaluated {
     resources: Vec<ResourceSummary>,
     failures: FailureAnalysis,
     failure_ids: Vec<String>,
+    /// The newest passport and its readiness decision, if one was issued.
+    passport: Option<(serde_json::Value, Option<serde_json::Value>)>,
 }
 
 struct Compared {
@@ -91,6 +93,8 @@ fn build(store: &LocalStore, ids: &[String], generated: &str) -> Result<Vec<Bloc
         let (outcomes, rate, records) = summarise(store, id)?;
         let resources = resource_summaries(&outcomes);
         let (_, failures, failure_ids) = crate::failures::analyse(store, id)?;
+        let passport = cybercore_evaluation_store::analysis::latest_passport(store, id)
+            .map_err(|e| e.to_string())?;
         evaluated.push(Evaluated {
             id: id.clone(),
             outcomes,
@@ -99,6 +103,7 @@ fn build(store: &LocalStore, ids: &[String], generated: &str) -> Result<Vec<Bloc
             resources,
             failures,
             failure_ids,
+            passport,
         });
     }
     let mut compared = Vec::new();
@@ -419,6 +424,49 @@ fn document(
                 e.id
             )));
         }
+    }
+
+    if evaluated.iter().any(|e| e.passport.is_some()) {
+        blocks.push(Block::Heading(2, "Readiness".into()));
+        blocks.push(Block::List(
+            evaluated
+                .iter()
+                .filter_map(|e| e.passport.as_ref().map(|p| (e, p)))
+                .map(|(e, (passport, decision))| {
+                    let status = passport["passport_status"].as_str().unwrap_or("draft");
+                    let validity = passport["expires_at"]
+                        .as_str()
+                        .map(|t| format!(" until {}", &t[..10.min(t.len())]))
+                        .unwrap_or_default();
+                    let (outcome, reviewer, gates) = match decision {
+                        Some(d) => (
+                            d["outcome"].as_str().unwrap_or("unknown").replace('_', " "),
+                            d["reviewer"].as_str().unwrap_or("unknown").to_string(),
+                            d["gate_results"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .map(|g| {
+                                    format!(
+                                        "{} {}{}",
+                                        g["gate_id"].as_str().unwrap_or("gate"),
+                                        g["status"].as_str().unwrap_or("?"),
+                                        if g["mandatory"].as_bool() == Some(false) { " (optional)" } else { "" }
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ),
+                        None => ("unknown".into(), "unknown".into(), String::new()),
+                    };
+                    format!(
+                        "{}: {} {status}{validity}; readiness decision {outcome}, signed by {reviewer}; gates: {gates}.",
+                        e.id,
+                        passport["record_id"].as_str().unwrap_or("passport"),
+                    )
+                })
+                .collect(),
+        ));
     }
 
     let mut seen = BTreeSet::new();

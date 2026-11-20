@@ -20,7 +20,7 @@ Digest fields currently validate SHA-256 syntax only. The canonical serializatio
 | `common/evidence-reference.schema.json` | embedded | Evidence pointer with relationship semantics |
 | `system/system-fingerprint.schema.json` | `system_fingerprint` | Snapshot of the evaluated configuration |
 | `benchmark/task-revision.schema.json` | `task_revision` | Frozen task specification and verification requirements |
-| `evaluation/evaluation-plan.schema.json` | `evaluation_plan` | Experiment design and frozen sampling policy; optional `analysis_plan.comparisons` predeclare pairwise comparisons (ADR-0021) |
+| `evaluation/evaluation-plan.schema.json` | `evaluation_plan` | Experiment design and frozen sampling policy; optional `analysis_plan.comparisons` predeclare pairwise comparisons (ADR-0021) and `analysis_plan.readiness` declares readiness gates in advance (ADR-0028) |
 | `evaluation/evaluation.schema.json` | `evaluation` | Campaign lifecycle and progress projection |
 | `evaluation/trial.schema.json` | `trial` | Planned sampling unit |
 | `evaluation/run.schema.json` | `run` | Actual execution attempt; optional `agent_report.reported_usage` holds agent-reported tokens and their declared-price cost (ADR-0022) |

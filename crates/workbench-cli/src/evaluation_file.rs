@@ -47,7 +47,89 @@ pub struct EvaluationFile {
     /// (ADR-0022). Never a secret; costs are estimates, not bills.
     #[serde(default)]
     pub pricing: Option<PricingSpec>,
+    /// Readiness gates (ADR-0028), declared in advance and frozen with the
+    /// plan before the first trial runs. `workbench passport` evaluates them.
+    #[serde(default)]
+    pub readiness: Option<ReadinessSpec>,
 }
+
+/// What the agent would be approved for, and the gates it must pass.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadinessSpec {
+    pub workload: String,
+    /// assisted, supervised (default), bounded_autonomous or high_autonomy.
+    #[serde(default = "default_autonomy")]
+    pub autonomy_level: String,
+    #[serde(default)]
+    pub permitted_effects: Vec<String>,
+    #[serde(default)]
+    pub excluded_effects: Vec<String>,
+    /// How long an approved passport stays active (1 to 365 days).
+    #[serde(default = "default_valid_for_days")]
+    pub valid_for_days: u64,
+    pub gates: Vec<GateSpec>,
+}
+
+/// One gate: a metric threshold, or a cap on failures of named criteria.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateSpec {
+    pub gate_id: String,
+    /// Defaults to capability (pass rate), operational (time, tokens,
+    /// cost) or safety (criteria).
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default = "default_true")]
+    pub mandatory: bool,
+    #[serde(default)]
+    pub metric: Option<String>,
+    #[serde(default)]
+    pub at_least: Option<f64>,
+    #[serde(default)]
+    pub at_most: Option<f64>,
+    #[serde(default)]
+    pub criteria: Option<Vec<String>>,
+    #[serde(default)]
+    pub max_failures: Option<u64>,
+}
+
+fn default_autonomy() -> String {
+    "supervised".into()
+}
+
+fn default_valid_for_days() -> u64 {
+    30
+}
+
+fn default_true() -> bool {
+    true
+}
+
+const AUTONOMY: &[&str] = &[
+    "assisted",
+    "supervised",
+    "bounded_autonomous",
+    "high_autonomy",
+];
+const GATE_METRICS: &[&str] = &[
+    "pass_rate",
+    "pass_rate_lower_bound",
+    "wall_time_median_ms",
+    "wall_time_p90_ms",
+    "tokens_per_trial",
+    "cost_per_trial",
+];
+const GATE_CATEGORIES: &[&str] = &[
+    "safety",
+    "security",
+    "privacy",
+    "reliability",
+    "capability",
+    "operational",
+    "compliance",
+    "other",
+];
 
 /// Declared token prices, in one currency.
 #[derive(Debug, Deserialize)]
@@ -607,6 +689,9 @@ impl EvaluationFile {
         if let Some(plan) = &self.analysis_plan {
             self.check_analysis_plan(plan)?;
         }
+        if let Some(readiness) = &self.readiness {
+            self.check_readiness(readiness)?;
+        }
         if self.pricing()?.is_some() && !self.collects_outputs() {
             return Err("pricing is set, but no trial sets task_input.collect_outputs, so no usage report (cybercore-usage.json) can be read".into());
         }
@@ -634,6 +719,163 @@ impl EvaluationFile {
         Pricing::new(&spec.currency, models)
             .map(Some)
             .map_err(|e| format!("pricing: {e}"))
+    }
+
+    fn check_readiness(&self, readiness: &ReadinessSpec) -> Result<(), String> {
+        let workload = readiness.workload.trim();
+        if workload.is_empty() || workload.len() > 256 {
+            return Err("readiness.workload must be 1 to 256 characters".into());
+        }
+        if !AUTONOMY.contains(&readiness.autonomy_level.as_str()) {
+            return Err(format!(
+                "readiness.autonomy_level must be one of {}",
+                AUTONOMY.join(", ")
+            ));
+        }
+        if !(1..=365).contains(&readiness.valid_for_days) {
+            return Err("readiness.valid_for_days must be between 1 and 365".into());
+        }
+        for effect in readiness
+            .permitted_effects
+            .iter()
+            .chain(&readiness.excluded_effects)
+        {
+            if effect.trim().is_empty() || effect.len() > 512 {
+                return Err("readiness effects must be 1 to 512 characters each".into());
+            }
+        }
+        if readiness.gates.is_empty() || readiness.gates.len() > 32 {
+            return Err("readiness.gates must list 1 to 32 gates".into());
+        }
+        let fingerprints: BTreeSet<&str> = self
+            .schedule
+            .trials
+            .iter()
+            .map(|t| t.system_fingerprint_ref.record_id.as_str())
+            .collect();
+        if fingerprints.len() > 1 {
+            return Err(
+                "readiness needs every trial to share one system_fingerprint_ref (one agent per evaluation)"
+                    .into(),
+            );
+        }
+        let known: BTreeSet<String> = criterion_ids(&self.verifier)
+            .into_iter()
+            .map(|(_, criterion)| criterion)
+            .collect();
+        let mut ids = BTreeSet::new();
+        for gate in &readiness.gates {
+            let at = format!("readiness.gates[{}]", gate.gate_id);
+            if !valid_record_id(&gate.gate_id) || !ids.insert(gate.gate_id.as_str()) {
+                return Err(format!(
+                    "readiness.gates[].gate_id {:?} must be a unique ID ([A-Za-z0-9][A-Za-z0-9._:-]{{0,127}})",
+                    gate.gate_id
+                ));
+            }
+            if let Some(category) = &gate.category {
+                if !GATE_CATEGORIES.contains(&category.as_str()) {
+                    return Err(format!(
+                        "{at}.category must be one of {}",
+                        GATE_CATEGORIES.join(", ")
+                    ));
+                }
+            }
+            match (&gate.metric, &gate.criteria) {
+                (Some(metric), None) => {
+                    if !GATE_METRICS.contains(&metric.as_str()) {
+                        return Err(format!(
+                            "{at}.metric must be one of {}",
+                            GATE_METRICS.join(", ")
+                        ));
+                    }
+                    if gate.max_failures.is_some() {
+                        return Err(format!("{at}.max_failures applies only to criteria gates"));
+                    }
+                    let threshold = match (gate.at_least, gate.at_most) {
+                        (Some(v), None) | (None, Some(v)) => v,
+                        _ => {
+                            return Err(format!(
+                                "{at} needs exactly one of at_least or at_most"
+                            ))
+                        }
+                    };
+                    let ceiling = if metric.starts_with("pass_rate") { 1.0 } else { f64::MAX };
+                    if !threshold.is_finite() || !(0.0..=ceiling).contains(&threshold) {
+                        return Err(format!(
+                            "{at} threshold must be {}",
+                            if ceiling == 1.0 { "between 0 and 1" } else { "finite and not negative" }
+                        ));
+                    }
+                }
+                (None, Some(criteria)) => {
+                    if gate.at_least.is_some() || gate.at_most.is_some() {
+                        return Err(format!("{at}: at_least and at_most apply only to metric gates"));
+                    }
+                    if criteria.is_empty() {
+                        return Err(format!("{at}.criteria must list at least one criterion"));
+                    }
+                    if let Some(unknown) = criteria.iter().find(|c| !known.contains(*c)) {
+                        return Err(format!(
+                            "{at}.criteria names {unknown:?}, which no trial's verifier checks"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "{at} needs exactly one of metric (with at_least or at_most) or criteria (with optional max_failures)"
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The contract's `analysis_plan.readiness` for the declared gates.
+    fn readiness_record(&self) -> Option<Value> {
+        let readiness = self.readiness.as_ref()?;
+        let gates: Vec<Value> = readiness
+            .gates
+            .iter()
+            .map(|g| {
+                let category = g.category.clone().unwrap_or_else(|| {
+                    match (g.metric.as_deref(), &g.criteria) {
+                        (Some(m), _) if m.starts_with("pass_rate") => "capability",
+                        (Some(_), _) => "operational",
+                        _ => "safety",
+                    }
+                    .to_string()
+                });
+                let mut gate = serde_json::json!({
+                    "gate_id": g.gate_id,
+                    "gate_category": category,
+                    "mandatory": g.mandatory,
+                });
+                if let Some(map) = gate.as_object_mut() {
+                    if let Some(metric) = &g.metric {
+                        map.insert("metric".into(), metric.clone().into());
+                        if let Some(v) = g.at_least {
+                            map.insert("at_least".into(), v.into());
+                        }
+                        if let Some(v) = g.at_most {
+                            map.insert("at_most".into(), v.into());
+                        }
+                    }
+                    if let Some(criteria) = &g.criteria {
+                        map.insert("criteria".into(), serde_json::json!(criteria));
+                        map.insert("max_failures".into(), g.max_failures.unwrap_or(0).into());
+                    }
+                }
+                gate
+            })
+            .collect();
+        Some(serde_json::json!({
+            "workload": readiness.workload.trim(),
+            "autonomy_level": readiness.autonomy_level,
+            "permitted_effects": readiness.permitted_effects,
+            "excluded_effects": readiness.excluded_effects,
+            "valid_for_days": readiness.valid_for_days,
+            "gates": gates,
+        }))
     }
 
     fn check_analysis_plan(&self, plan: &AnalysisPlanSpec) -> Result<(), String> {
@@ -705,7 +947,9 @@ impl EvaluationFile {
 
     /// The declaration to freeze, if the file has an `analysis_plan`.
     pub fn plan_declaration(&self) -> Option<PlanDeclaration> {
-        let plan = self.analysis_plan.as_ref()?;
+        if self.analysis_plan.is_none() && self.readiness.is_none() {
+            return None;
+        }
         let task_families: BTreeSet<String> = self
             .task_revisions
             .iter()
@@ -730,25 +974,41 @@ impl EvaluationFile {
         let mut operating_conditions = vec![runner];
         operating_conditions.extend(networks);
         operating_conditions.push(format!("verifier: {}", self.verifier_summary()));
+        let question = match (&self.analysis_plan, &self.readiness) {
+            (Some(plan), _) => plan.decision_question.trim().to_string(),
+            (None, Some(r)) => format!(
+                "Is {} ready for {} ({})?",
+                self.evaluation_id(),
+                r.workload.trim(),
+                r.autonomy_level
+            ),
+            (None, None) => String::new(),
+        };
+        let comparisons = self
+            .analysis_plan
+            .iter()
+            .flat_map(|plan| &plan.comparisons)
+            .map(|c| ComparisonDeclaration {
+                comparison_id: c.comparison_id.clone(),
+                baseline_evaluation_id: c.baseline_evaluation_id.clone(),
+                alpha: c.alpha,
+                minimum_matched_tasks: c.minimum_matched_tasks,
+                practical_significance_threshold: c.practical_significance_threshold,
+            })
+            .collect();
         Some(PlanDeclaration {
-            decision_question: plan.decision_question.trim().to_string(),
-            task_selection_method: plan.task_selection_method.clone(),
+            decision_question: question,
+            task_selection_method: self
+                .analysis_plan
+                .as_ref()
+                .map_or_else(default_task_selection, |p| p.task_selection_method.clone()),
             task_families: task_families.into_iter().collect(),
             operating_conditions: operating_conditions
                 .into_iter()
                 .map(|c| c.chars().take(512).collect())
                 .collect(),
-            comparisons: plan
-                .comparisons
-                .iter()
-                .map(|c| ComparisonDeclaration {
-                    comparison_id: c.comparison_id.clone(),
-                    baseline_evaluation_id: c.baseline_evaluation_id.clone(),
-                    alpha: c.alpha,
-                    minimum_matched_tasks: c.minimum_matched_tasks,
-                    practical_significance_threshold: c.practical_significance_threshold,
-                })
-                .collect(),
+            comparisons,
+            readiness: self.readiness_record(),
         })
     }
 

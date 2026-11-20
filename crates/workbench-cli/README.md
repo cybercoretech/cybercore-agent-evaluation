@@ -136,6 +136,51 @@ REPORTS-SLOPPY: 10 of 12 trial(s) failed or had no verdict (latest attempts)
 - **Records.** Each verified failure, and each run error, is recorded once as a contract `failure` record linked to its verification result or the run's final event. Readiness summaries use these records.
 - **Report.** `workbench report` includes a **Failures** section with each evaluation's top five groups.
 
+## 🎫 Readiness passports
+
+`workbench passport EVAL --reviewer NAME` decides whether an agent is ready for a workload, using gates **declared in advance** ([ADR-0028](../../docs/decisions/0028-readiness-passports.md)). It records a readiness decision and a capability passport.
+
+Declare the gates in the evaluation file or suite **before the first run**. The first run freezes them with the plan, and they can't change afterwards:
+
+```json
+"readiness": {
+  "workload": "summing numbers into a report file",
+  "autonomy_level": "supervised",
+  "permitted_effects": ["write files under /workspace/output"],
+  "excluded_effects": ["network access"],
+  "valid_for_days": 30,
+  "gates": [
+    {"gate_id": "pass-rate", "metric": "pass_rate_lower_bound", "at_least": 0.8},
+    {"gate_id": "always-reports", "criteria": ["says-done"], "max_failures": 0, "category": "reliability"},
+    {"gate_id": "cost", "metric": "cost_per_trial", "at_most": 0.02, "mandatory": false}
+  ]
+}
+```
+
+```
+REPORTS-CAREFUL: readiness for summing numbers into a report file (supervised)
+  gate        pass-rate          pass         pass rate lower bound 1.000 (cluster bootstrap) is at least 0.8.
+  gate        always-reports     pass         0 failure(s) of says-done in 12 trial(s); at most 0 allowed.
+  gate        cost               pass         0.0114 USD per trial (estimated) is at most 0.02. (optional)
+  outcome     approved: Every gate passed.
+  passport    PASSPORT-513bfdcb744925c00d209d4a active until 2026-12-20; reviewer Example Reviewer
+```
+
+- **Gate types:**
+  - **Metric gates** take `pass_rate`, `pass_rate_lower_bound`, `wall_time_median_ms`, `wall_time_p90_ms`, `tokens_per_trial` or `cost_per_trial` (in currency units), with exactly one of `at_least` or `at_most`.
+  - **Criteria gates** allow at most `max_failures` (default 0) failures of named criteria, and need every trial with an outcome to have judged them.
+  - Gates are mandatory unless they say `"mandatory": false`. The category defaults to capability, operational or safety.
+- **The outcome follows the gates:**
+  - **approved:** every gate passes;
+  - **conditionally approved:** only optional gates fail or can't be judged;
+  - **rejected:** a mandatory gate fails;
+  - **insufficient evidence:** a mandatory gate can't be judged, the pass rate is only descriptive, or the gates were frozen after the first result.
+- **The workbench evaluates; a person signs.** `--reviewer` is required and recorded on the decision.
+- **The passport:**
+  - **Status.** An approved decision issues an **active** passport that expires after `valid_for_days`. Anything else gives a **draft** that says why.
+  - **Contents:** the scope, trial counts, one capability line per task family with an interval, the known failure records from `workbench failures`, limitations, and permitted-use constraints (this agent version, these task families, this autonomy level).
+- **Repeating it** over unchanged results returns the same passport. `--json` prints the decision and passport records, and `workbench report` shows each evaluation's newest passport.
+
 ## 📝 Reports
 
 `workbench report` turns one or more evaluations into a single page you can share ([ADR-0026](../../docs/decisions/0026-workbench-report.md)). The first evaluation is the baseline, and each of the others is compared with it:
